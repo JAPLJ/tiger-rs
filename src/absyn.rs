@@ -1,6 +1,7 @@
 // Abstract Syntax + Parser
 
 use chumsky::{input::SpannedInput, prelude::*};
+use lasso::{Rodeo, Spur};
 
 use crate::lex::{Span, Token};
 
@@ -21,21 +22,21 @@ pub enum BinOp {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Var<'src> {
-    Simple(&'src str),
-    Subscript(Box<Self>, Spanned<Expr<'src>>),
+pub enum Var {
+    Simple(Spur),
+    Subscript(Box<Self>, Spanned<Expr>),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Expr<'src> {
-    Var(Box<Var<'src>>),
+pub enum Expr {
+    Var(Box<Var>),
     Nil,
     Int(i64),
     Str(String),
-    Call(&'src str, Vec<Spanned<Self>>),
+    Call(Spur, Vec<Spanned<Self>>),
     BinOp(Box<Spanned<Self>>, BinOp, Box<Spanned<Self>>),
     Seq(Vec<Spanned<Self>>),
-    Assign(Box<Spanned<Var<'src>>>, Box<Spanned<Self>>),
+    Assign(Box<Spanned<Var>>, Box<Spanned<Self>>),
     If(
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
@@ -43,57 +44,60 @@ pub enum Expr<'src> {
     ),
     While(Box<Spanned<Self>>, Box<Spanned<Self>>),
     For(
-        &'src str,
+        Spur,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
     ),
     Break,
-    Let(Vec<Decl<'src>>, Box<Spanned<Self>>),
+    Let(Vec<Decl>, Box<Spanned<Self>>),
     Array(
         // type, size, init
-        &'src str,
+        Spur,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
     ),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Decl<'src> {
-    Func(Vec<Spanned<Func<'src>>>),
+pub enum Decl {
+    Func(Vec<Spanned<Func>>),
     Var(
         // name, type, init
-        &'src str,
-        Option<Spanned<&'src str>>,
-        Box<Spanned<Expr<'src>>>,
+        Spur,
+        Option<Spanned<Spur>>,
+        Box<Spanned<Expr>>,
     ),
-    Type(Vec<(&'src str, Spanned<Type<'src>>)>),
+    Type(Vec<(Spur, Spanned<Type>)>),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Type<'src> {
-    Name(&'src str),
-    Array(&'src str),
+pub enum Type {
+    Name(Spur),
+    Array(Spur),
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Func<'src> {
-    pub name: &'src str,
-    pub args: Vec<(&'src str, &'src str)>,
-    pub result: Option<&'src str>,
-    pub body: Spanned<Expr<'src>>,
+pub struct Func {
+    pub id: Spur,
+    pub args: Vec<(Spur, Spur)>,
+    pub result: Option<Spur>,
+    pub body: Spanned<Expr>,
 }
 
-pub type ParserInput<'toks, 'src> = SpannedInput<Token<'src>, Span, &'toks [(Token<'src>, Span)]>;
+pub type ParserInput<'src> = SpannedInput<Token<'src>, Span, &'src [(Token<'src>, Span)]>;
 
-pub fn parser<'toks, 'src: 'toks>() -> impl Parser<
-    'toks,
-    ParserInput<'toks, 'src>,
-    Spanned<Expr<'src>>,
-    extra::Err<Rich<'toks, Token<'src>, Span>>,
+pub fn parser<'src>() -> impl Parser<
+    'src,
+    ParserInput<'src>,
+    Spanned<Expr>,
+    extra::Full<Rich<'src, Token<'src>, Span>, Rodeo, ()>,
 > + Clone {
     recursive(|expr| {
-        let ident = select! { Token::Ident(x) => x };
+        let ident = select! { Token::Ident(x) => x }.map_with(|x, e| {
+            let r: &mut Rodeo = e.state();
+            r.get_or_intern(x)
+        });
 
         let decls = {
             let ty = just(&[Token::Array, Token::Of])
@@ -146,7 +150,7 @@ pub fn parser<'toks, 'src: 'toks>() -> impl Parser<
                 .map_with(|(((id, args), ty), body), e| {
                     (
                         Func {
-                            name: id,
+                            id,
                             args,
                             result: ty,
                             body,
@@ -344,6 +348,7 @@ mod tests {
     use crate::lex::{lexer, Token};
     use assert_matches::assert_matches;
     use chumsky::prelude::*;
+    use lasso::Rodeo;
 
     fn tokenize_ok<'a>(s: &'a str) -> Vec<Spanned<Token<'a>>> {
         let (toks, errs) = lexer().parse(s).into_output_errors();
@@ -353,14 +358,15 @@ mod tests {
 
     macro_rules! parse {
         ($toks:expr) => {{
+            let mut symt = Rodeo::new();
             let (ast, errs) = parser()
                 .map_with(|ast, e| (ast, e.span()))
-                .parse($toks.as_slice().spanned((1..1).into()))
+                .parse_with_state($toks.as_slice().spanned((1..1).into()), &mut symt)
                 .into_output_errors();
             if let Some((expr, _)) = ast {
-                (Some(expr), errs)
+                (Some(expr), Some(symt), errs)
             } else {
-                (None, errs)
+                (None, None, errs)
             }
         }};
     }
@@ -380,21 +386,24 @@ in
 end
         "#,
         );
-        let (expr, errs) = parse!(toks);
+        let (expr, symt, errs) = parse!(toks);
         assert!(errs.is_empty(), "{:?}", errs);
+        let symt = symt.unwrap();
         assert_matches!(expr, Some((e, _)) => {
             assert_matches!(e, Expr::Let(decls, e) => {
                 assert_matches!(decls.as_slice(), [
                     Decl::Type(ts),
-                    Decl::Var("x", None, _),
-                    Decl::Var("y", Some(_), _),
+                    Decl::Var(x, None, _),
+                    Decl::Var(y, Some(_), _),
                     Decl::Func(fs)
                 ] => {
                     assert_eq!(ts.len(), 2);
+                    assert_eq!(Some(*x), symt.get("x"));
+                    assert_eq!(Some(*y), symt.get("y"));
                     assert_eq!(fs.len(), 1);
                 });
                 assert_matches!(e.as_ref(), (Expr::Var(v), _) => {
-                    assert_matches!(v.as_ref(), Var::Simple("x"))
+                    assert_matches!(v.as_ref(), Var::Simple(_x))
                 });
             });
         });
@@ -403,7 +412,7 @@ end
     #[test]
     fn parse_binop() {
         let toks = tokenize_ok("a / b | c + d < e & f - g * h");
-        let (expr, errs) = parse!(toks);
+        let (expr, _, errs) = parse!(toks);
         assert!(errs.is_empty(), "{:?}", errs);
         assert_matches!(expr, Some((e, _)) => {
             assert_matches!(e, Expr::If(l, _, Some(r)) => {

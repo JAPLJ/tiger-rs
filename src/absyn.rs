@@ -5,6 +5,7 @@ use lasso::{Rodeo, Spur};
 
 use crate::lex::{Span, Token};
 
+pub type Symbol = Spur;
 pub type Spanned<T> = (T, Span);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,7 +24,7 @@ pub enum BinOp {
 
 #[derive(Debug, PartialEq)]
 pub enum Var {
-    Simple(Spur),
+    Simple(Symbol),
     Subscript(Box<Self>, Spanned<Expr>),
 }
 
@@ -33,7 +34,7 @@ pub enum Expr {
     Nil,
     Int(i64),
     Str(String),
-    Call(Spur, Vec<Spanned<Self>>),
+    Call(Symbol, Vec<Spanned<Self>>),
     BinOp(Box<Spanned<Self>>, BinOp, Box<Spanned<Self>>),
     Seq(Vec<Spanned<Self>>),
     Assign(Box<Spanned<Var>>, Box<Spanned<Self>>),
@@ -44,7 +45,7 @@ pub enum Expr {
     ),
     While(Box<Spanned<Self>>, Box<Spanned<Self>>),
     For(
-        Spur,
+        Symbol,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
@@ -53,7 +54,7 @@ pub enum Expr {
     Let(Vec<Decl>, Box<Spanned<Self>>),
     Array(
         // type, size, init
-        Spur,
+        Symbol,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
     ),
@@ -64,24 +65,24 @@ pub enum Decl {
     Func(Vec<Spanned<Func>>),
     Var(
         // name, type, init
-        Spur,
-        Option<Spanned<Spur>>,
+        Symbol,
+        Option<Spanned<Symbol>>,
         Box<Spanned<Expr>>,
     ),
-    Type(Vec<(Spur, Spanned<Type>)>),
+    Type(Vec<(Symbol, Spanned<Type>)>),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Type {
-    Name(Spur),
-    Array(Spur),
+    Name(Symbol),
+    Array(Symbol),
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Func {
-    pub id: Spur,
-    pub args: Vec<(Spur, Spur)>,
-    pub result: Option<Spur>,
+    pub id: Symbol,
+    pub args: Vec<(Symbol, Symbol)>,
+    pub result: Option<Symbol>,
     pub body: Spanned<Expr>,
 }
 

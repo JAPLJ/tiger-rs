@@ -16,8 +16,6 @@ pub enum BinOp {
     Le,
     Gt,
     Ge,
-    LAnd,
-    LOr,
 }
 
 #[derive(Debug, PartialEq)]
@@ -305,18 +303,32 @@ pub fn parser<'toks, 'src: 'toks>() -> impl Parser<
         };
 
         let land = {
-            let op = just(Token::Op("&")).to(BinOp::LAnd);
+            let op = just(Token::Op("&"));
             cmp.clone()
-                .foldl_with(op.then(cmp).repeated(), |a, (op, b), e| {
-                    (Expr::BinOp(Box::new(a), op, Box::new(b)), e.span())
+                .foldl_with(op.ignore_then(cmp).repeated(), |a, b, e| {
+                    (
+                        Expr::If(
+                            Box::new(a),
+                            Box::new(b),
+                            Some(Box::new((Expr::Int(0), e.span()))),
+                        ),
+                        e.span(),
+                    )
                 })
         };
 
         let lor = {
-            let op = just(Token::Op("|")).to(BinOp::LOr);
+            let op = just(Token::Op("|"));
             land.clone()
-                .foldl_with(op.then(land).repeated(), |a, (op, b), e| {
-                    (Expr::BinOp(Box::new(a), op, Box::new(b)), e.span())
+                .foldl_with(op.ignore_then(land).repeated(), |a, b, e| {
+                    (
+                        Expr::If(
+                            Box::new(a),
+                            Box::new((Expr::Int(1), e.span())),
+                            Some(Box::new(b)),
+                        ),
+                        e.span(),
+                    )
                 })
         };
 
@@ -392,9 +404,9 @@ end
         let (expr, errs) = parse!(toks);
         assert!(errs.is_empty(), "{:?}", errs);
         assert_matches!(expr, Some((e, _)) => {
-            assert_matches!(e, Expr::BinOp(l, BinOp::LOr, r) => {
+            assert_matches!(e, Expr::If(l, _, Some(r)) => {
                 assert_matches!(l.as_ref(), (Expr::BinOp(_, BinOp::Div, _), _));
-                assert_matches!(r.as_ref(), (Expr::BinOp(l, BinOp::LAnd, r), _) => {
+                assert_matches!(r.as_ref(), (Expr::If(l, r, Some(_)), _) => {
                     assert_matches!(l.as_ref(), (Expr::BinOp(l, BinOp::Lt, _), _) => {
                         assert_matches!(l.as_ref(), (Expr::BinOp(_, BinOp::Add, _), _));
                     });

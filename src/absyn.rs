@@ -323,3 +323,86 @@ pub fn parser<'toks, 'src: 'toks>() -> impl Parser<
         lor
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{parser, BinOp, Decl, Expr, Spanned, Var};
+    use crate::lex::{lexer, Token};
+    use assert_matches::assert_matches;
+    use chumsky::prelude::*;
+
+    fn tokenize_ok<'a>(s: &'a str) -> Vec<Spanned<Token<'a>>> {
+        let (toks, errs) = lexer().parse(s).into_output_errors();
+        assert!(errs.is_empty(), "{:?}", errs);
+        toks.unwrap()
+    }
+
+    macro_rules! parse {
+        ($toks:expr) => {{
+            let (ast, errs) = parser()
+                .map_with(|ast, e| (ast, e.span()))
+                .parse($toks.as_slice().spanned((1..1).into()))
+                .into_output_errors();
+            if let Some((expr, _)) = ast {
+                (Some(expr), errs)
+            } else {
+                (None, errs)
+            }
+        }};
+    }
+
+    #[test]
+    fn parse_decls() {
+        let toks = tokenize_ok(
+            r#"
+let
+    type t1 = int
+    type t2 = array of t1
+    var x := 0
+    var y: str := "s"
+    function f(v: int): int = v
+in
+    x
+end
+        "#,
+        );
+        let (expr, errs) = parse!(toks);
+        assert!(errs.is_empty(), "{:?}", errs);
+        assert_matches!(expr, Some((e, _)) => {
+            assert_matches!(e, Expr::Let(decls, e) => {
+                assert_matches!(decls.as_slice(), [
+                    Decl::Type(ts),
+                    Decl::Var("x", None, _),
+                    Decl::Var("y", Some(_), _),
+                    Decl::Func(fs)
+                ] => {
+                    assert_eq!(ts.len(), 2);
+                    assert_eq!(fs.len(), 1);
+                });
+                assert_matches!(e.as_ref(), (Expr::Var(v), _) => {
+                    assert_matches!(v.as_ref(), Var::Simple("x"))
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn parse_binop() {
+        let toks = tokenize_ok("a / b | c + d < e & f - g * h");
+        let (expr, errs) = parse!(toks);
+        assert!(errs.is_empty(), "{:?}", errs);
+        assert_matches!(expr, Some((e, _)) => {
+            assert_matches!(e, Expr::BinOp(l, BinOp::LOr, r) => {
+                assert_matches!(l.as_ref(), (Expr::BinOp(_, BinOp::Div, _), _));
+                assert_matches!(r.as_ref(), (Expr::BinOp(l, BinOp::LAnd, r), _) => {
+                    assert_matches!(l.as_ref(), (Expr::BinOp(l, BinOp::Lt, _), _) => {
+                        assert_matches!(l.as_ref(), (Expr::BinOp(_, BinOp::Add, _), _));
+                    });
+                    assert_matches!(r.as_ref(), (Expr::BinOp(_, BinOp::Sub, r), _) => {
+                        assert_matches!(r.as_ref(), (Expr::BinOp(_, BinOp::Mul, _), _));
+                    });
+                });
+            });
+        });
+    }
+}

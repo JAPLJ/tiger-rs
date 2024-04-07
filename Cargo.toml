@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 chumsky = "1.0.0-alpha.7"
+
+[dev-dependencies]
+assert_matches = "1.5.0"

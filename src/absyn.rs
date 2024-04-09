@@ -22,13 +22,13 @@ pub enum BinOp {
     Ge,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Var {
     Simple(Symbol),
-    Subscript(Box<Self>, Spanned<Expr>),
+    Subscript(Box<Spanned<Self>>, Spanned<Expr>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Var(Box<Var>),
     Nil,
@@ -60,7 +60,7 @@ pub enum Expr {
     ),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Decl {
     Func(Vec<Spanned<Func>>),
     Var(
@@ -72,13 +72,13 @@ pub enum Decl {
     Type(Vec<(Symbol, Spanned<Type>)>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Name(Symbol),
     Array(Symbol),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Func {
     pub id: Symbol,
     pub args: Vec<(Symbol, Symbol)>,
@@ -179,12 +179,17 @@ pub fn parser<'src>() -> impl Parser<
             Token::Str(s) => Expr::Str(s),
         };
 
-        let lvalue = ident.map(Var::Simple).foldl_with(
-            expr.clone()
-                .delimited_by(just(Token::Ctrl("[")), just(Token::Ctrl("]")))
-                .repeated(),
-            |lv, e, _| Var::Subscript(Box::new(lv), e),
-        );
+        let lvalue = ident
+            .map_with(|x, e| (Var::Simple(x), e.span()))
+            .foldl_with(
+                expr.clone()
+                    .delimited_by(just(Token::Ctrl("[")), just(Token::Ctrl("]")))
+                    .repeated(),
+                |lv: Spanned<Var>, e, _| {
+                    let span = lv.1.union(e.1);
+                    (Var::Subscript(Box::new(lv), e), span)
+                },
+            );
 
         let seq = expr
             .clone()
@@ -195,7 +200,6 @@ pub fn parser<'src>() -> impl Parser<
 
         let assign = lvalue
             .clone()
-            .map_with(|lv, e| (lv, e.span()))
             .then_ignore(just(Token::Ctrl(":=")))
             .then(expr.clone())
             .map(|(lv, expr)| Expr::Assign(Box::new(lv), Box::new(expr)));
@@ -247,7 +251,7 @@ pub fn parser<'src>() -> impl Parser<
             val,
             assign,
             array,
-            lvalue.map(|lv| Expr::Var(Box::new(lv))),
+            lvalue.map(|(lv, _)| Expr::Var(Box::new(lv))),
             if_,
             while_,
             for_,

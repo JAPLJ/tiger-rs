@@ -178,7 +178,53 @@ fn trans_var(
     v: &Spanned<absyn::Var>,
     errs: &mut Vec<Error>,
 ) -> ExpTy {
-    todo!()
+    let (v, span) = v;
+    match v {
+        absyn::Var::Simple(sym) => {
+            if let Some(entry) = venv.get(sym) {
+                if let types::EnvEntry::Var(ty) = entry {
+                    let ty = ty.resolve().unwrap_or_else(|sym| {
+                        errs.push((
+                            format!("cannot find type"),
+                            format!("{} is not defined here", symt.resolve(&sym)),
+                            *span,
+                        ));
+                        types::Type::Int
+                    });
+                    ((), ty)
+                } else {
+                    errs.push((
+                        format!("function is not a variable"),
+                        format!("{} is function, not variable", symt.resolve(sym)),
+                        *span,
+                    ));
+                    ((), types::Type::Int)
+                }
+            } else {
+                errs.push((
+                    format!("cannot find variable"),
+                    format!("{} is not defined here", symt.resolve(sym)),
+                    *span,
+                ));
+                ((), types::Type::Int)
+            }
+        }
+        absyn::Var::Subscript(arr, ix) => {
+            let (_, aty) = trans_var(symt, venv, tenv, arr, errs);
+            if let types::Type::Array(ety) = aty {
+                let (_, ity) = inner(symt, venv, tenv, ix, errs);
+                check_type!(ity, types::Type::Int, ix.1, errs);
+                ((), *ety)
+            } else {
+                errs.push((
+                    format!("subscript requires array"),
+                    format!("this has type {:?}", aty),
+                    *span,
+                ));
+                ((), types::Type::Int)
+            }
+        }
+    }
 }
 
 fn trans_dec(venv: &VEnv, tenv: &TEnv, d: &absyn::Decl, errs: &mut Vec<Error>) -> (VEnv, TEnv) {

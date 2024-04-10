@@ -428,6 +428,18 @@ mod tests {
             function f(x: int, y: string): string = y
         in f(1, 2) end"#
         ));
+        assert!(type_fail(
+            r#"
+        let
+            function f(x: int): int = x + 1
+        in f(1, 2) end"#
+        ));
+        assert!(type_fail(
+            r#"
+        let
+            function f(x: int): int = x + 1
+        in f("z") end"#
+        ));
     }
 
     #[test]

@@ -155,14 +155,11 @@ pub fn lexer<'src>(
 
 #[cfg(test)]
 mod tests {
-    use super::{lexer, Token};
-    use chumsky::prelude::*;
+    use super::Token;
+    use crate::test_util::tokenize_ok as tokenize;
 
     fn tokenize_ok<'a>(s: &'a str) -> Vec<Token<'a>> {
-        let (toks, errs) = lexer().parse(s).into_output_errors();
-        assert!(errs.is_empty(), "{:?}", errs);
-        assert!(toks.is_some());
-        toks.unwrap().iter().map(|(t, _)| t.clone()).collect()
+        tokenize(s).into_iter().map(|(t, _)| t).collect()
     }
 
     #[test]

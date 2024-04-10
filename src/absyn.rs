@@ -349,32 +349,11 @@ pub fn parser<'src>() -> impl Parser<
 
 #[cfg(test)]
 mod tests {
-    use super::{parser, BinOp, Decl, Expr, Spanned, Var};
-    use crate::lex::{lexer, Token};
+    use super::{BinOp, Decl, Expr, Var};
+    use crate::parse;
+    use crate::test_util::tokenize_ok;
     use assert_matches::assert_matches;
     use chumsky::prelude::*;
-    use lasso::Rodeo;
-
-    fn tokenize_ok<'a>(s: &'a str) -> Vec<Spanned<Token<'a>>> {
-        let (toks, errs) = lexer().parse(s).into_output_errors();
-        assert!(errs.is_empty(), "{:?}", errs);
-        toks.unwrap()
-    }
-
-    macro_rules! parse {
-        ($toks:expr) => {{
-            let mut symt = Rodeo::new();
-            let (ast, errs) = parser()
-                .map_with(|ast, e| (ast, e.span()))
-                .parse_with_state($toks.as_slice().spanned((1..1).into()), &mut symt)
-                .into_output_errors();
-            if let Some((expr, _)) = ast {
-                (Some(expr), Some(symt), errs)
-            } else {
-                (None, None, errs)
-            }
-        }};
-    }
 
     #[test]
     fn parse_decls() {

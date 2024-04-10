@@ -12,6 +12,22 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn fill(&self, tenv: &TEnv) -> Result<Self, Symbol> {
+        match self {
+            Type::Int => Ok(Type::Int),
+            Type::String => Ok(Type::String),
+            Type::Array(ty) => Ok(Type::Array(Box::new(ty.fill(tenv)?))),
+            Type::Unit => Ok(Type::Unit),
+            Type::Name(sym, ty) => {
+                if let Some(ty) = ty {
+                    Ok(ty.fill(tenv)?)
+                } else {
+                    tenv.get(sym).ok_or(*sym).and_then(|t| t.fill(tenv))
+                }
+            }
+        }
+    }
+
     pub fn resolve(&self) -> Result<Self, Symbol> {
         match self {
             Type::Int => Ok(Type::Int),

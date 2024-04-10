@@ -3,18 +3,18 @@ use lasso::Rodeo;
 
 use crate::{
     absyn::{self, Spanned},
-    lex::Span,
+    error::GenericError,
     types::{self, TEnv, VEnv},
 };
 
 pub type ExpTy = ((), types::Type);
 
-pub type Error = (String, String, Span);
+pub type Error = GenericError;
 
 macro_rules! check_type {
     ($t:expr, $exp_t:expr, $span:expr, $errs:ident) => {{
         if $t != $exp_t {
-            $errs.push((
+            $errs.push(crate::error::GenericError(
                 format!("mismatched types"),
                 format!("expected {:?}, found {:?}", $exp_t, $t),
                 $span,
@@ -25,7 +25,7 @@ macro_rules! check_type {
 
 macro_rules! undefined_symbol {
     ($sym:expr, $kind:expr, $span:expr, $errs:ident) => {{
-        $errs.push((
+        $errs.push(crate::error::GenericError(
             format!("cannot find {}", $kind),
             format!("{} is not defined here", $sym),
             $span,
@@ -60,7 +60,7 @@ fn inner(
             if let Some(ft) = venv.get(&f) {
                 if let types::EnvEntry::Func(aty, rty) = ft {
                     if args.len() != aty.len() {
-                        errs.push((
+                        errs.push(GenericError(
                             format!("unexpected number of arguments"),
                             format!("expected {} arguments, found {}", aty.len(), args.len()),
                             *span,
@@ -79,7 +79,7 @@ fn inner(
                         ((), rty.clone())
                     }
                 } else {
-                    errs.push((
+                    errs.push(GenericError(
                         format!("call expression requires function"),
                         format!("{} has type {:?}", symt.resolve(&f), ft),
                         *span,
@@ -158,7 +158,7 @@ fn inner(
                     check_type!(it, **ety, (*init).1, errs);
                     ((), aty.clone())
                 } else {
-                    errs.push((
+                    errs.push(GenericError(
                         format!("cannot create array"),
                         format!("{} has type {:?}, not array", symt.resolve(atys), aty),
                         *span,
@@ -191,7 +191,7 @@ fn trans_var(
                     });
                     ((), ty)
                 } else {
-                    errs.push((
+                    errs.push(GenericError(
                         format!("function is not a variable"),
                         format!("{} is function, not variable", symt.resolve(sym)),
                         *span,
@@ -210,7 +210,7 @@ fn trans_var(
                 check_type!(ity, types::Type::Int, ix.1, errs);
                 ((), *ety)
             } else {
-                errs.push((
+                errs.push(GenericError(
                     format!("subscript requires array"),
                     format!("this has type {:?}", aty),
                     *span,
@@ -229,14 +229,14 @@ fn trans_dec(
     errs: &mut Vec<Error>,
 ) -> (VEnv, TEnv) {
     let default = (venv.clone(), tenv.clone());
-    let (d, span) = d;
+    let (d, _span) = d;
     match d {
         absyn::Decl::Var(sym, ty, init) => {
             let (_, ity) = inner(symt, venv, tenv, init, errs);
             if let Some((tysym, tyspan)) = ty {
                 let ty = tenv.get(tysym).map(|t| t.resolve());
                 if let Some(Ok(ty)) = ty {
-                    check_type!(ity, ty, *tyspan, errs);
+                    check_type!(ity, ty, init.1, errs);
                 } else {
                     undefined_symbol!(symt.resolve(tysym), "type", *tyspan, errs);
                     return default;
@@ -302,7 +302,12 @@ fn trans_dec(
             let tenv3 = ts.iter().fold(tenv2.clone(), |env, (name, ty)| {
                 env.insert(*name, trans_ty(symt, &tenv2, ty, errs))
             });
-            (venv.clone(), tenv3)
+
+            // TODO: check dependencies appropriately
+            let tenv4 = ts.iter().fold(tenv3.clone(), |env, (name, _)| {
+                env.insert(*name, env.get(name).unwrap().fill(&tenv3).unwrap())
+            });
+            (venv.clone(), tenv4)
         }
     }
 }
@@ -332,5 +337,125 @@ fn trans_ty(
             );
             types::Type::Array(Box::new(ety))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        parse,
+        test_util::tokenize_ok,
+        types::{self, TEnv, VEnv},
+    };
+    use chumsky::prelude::*;
+
+    use super::{trans_exp, Error, ExpTy};
+
+    fn typecheck(prog: &str) -> (ExpTy, Vec<Error>) {
+        let toks = tokenize_ok(prog);
+        let (expr, symt, errs) = parse!(toks);
+        assert!(errs.is_empty(), "parse error: {:?}", errs);
+        let mut symt = symt.unwrap();
+
+        let venv = VEnv::new();
+        let tenv = TEnv::new()
+            .insert(symt.get_or_intern("int"), types::Type::Int)
+            .insert(symt.get_or_intern("string"), types::Type::String);
+
+        trans_exp(&symt, &venv, &tenv, &expr.unwrap())
+    }
+
+    fn type_ok(prog: &str) -> bool {
+        typecheck(prog).1.is_empty()
+    }
+
+    fn type_fail(prog: &str) -> bool {
+        !type_ok(prog)
+    }
+
+    #[test]
+    fn type_primitive() {
+        assert!(type_ok(r#"let var x: int := 0 in x end"#));
+        assert!(type_ok(r#"let var x: string := "0" in x end"#));
+        assert!(type_fail(r#"let var x: int := "0" in x end"#));
+        assert!(type_fail(r#"let var x: string := 0 in x end"#));
+    }
+
+    #[test]
+    fn type_array() {
+        assert!(type_ok(
+            r#"
+        let 
+            type t1 = int
+            type t2 = array of t1
+            var x := t2 [10] of 0
+            var y: t1 := 5
+        in
+            x[y / 2] := x[y + 1] - 2
+        end"#
+        ));
+        assert!(type_fail(r#"let var x := int [10] of 0 in x[0] end"#));
+        assert!(type_fail(
+            r#"
+        let
+            type t = array of int
+            var x := t [10] of "0"
+        in x[0] end"#
+        ));
+        assert!(type_fail(
+            r#"
+        let
+            type t = array of int
+            var x := t [10] of 0
+        in x["0"] end"#
+        ));
+    }
+
+    #[test]
+    fn type_func() {
+        assert!(type_ok(
+            r#"
+        let
+            function odd(x: int): int =
+                if x = 0 then 0 else even(x - 1)
+            function even(x: int): int =
+                if x = 0 then 1 else odd(x - 1)
+        in odd(5) end"#
+        ));
+        assert!(type_fail(
+            r#"
+        let
+            function f(x: int, y: string): string = y
+        in f(1, 2) end"#
+        ));
+    }
+
+    #[test]
+    fn type_expr() {
+        assert!(type_ok(r#"let var x: int := {"a"; 0} in x end"#));
+        assert!(type_fail(r#"let var x: int := {0; "a"} in x end"#));
+
+        assert!(type_fail(r#"let in if "a" then 1 else 0 end"#));
+        assert!(type_fail(r#"let in if 1 then "a" else 0 end"#));
+        assert!(type_ok(r#"let in if 1 then "a" end"#));
+
+        assert!(type_ok(
+            r#"
+        let
+            var x: int := 5
+        in
+            for i := 0 to x do i + 1
+        end"#
+        ));
+        assert!(type_fail(
+            r#"
+        let
+            var x: string := "a"
+        in
+            for i := 0 to x do i + 1
+        end"#
+        ));
+        assert!(type_ok(r#"let in while 1 do {} end"#));
+        assert!(type_fail(r#"let in while "" do {} end"#));
     }
 }

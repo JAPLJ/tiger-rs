@@ -227,7 +227,12 @@ fn trans_var(
     }
 }
 
-fn trans_dec(venv: &VEnv, tenv: &TEnv, d: &absyn::Decl, errs: &mut Vec<Error>) -> (VEnv, TEnv) {
+fn trans_dec(
+    venv: &VEnv,
+    tenv: &TEnv,
+    d: &Spanned<absyn::Decl>,
+    errs: &mut Vec<Error>,
+) -> (VEnv, TEnv) {
     todo!()
 }
 

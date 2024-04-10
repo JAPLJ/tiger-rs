@@ -51,7 +51,7 @@ pub enum Expr {
         Box<Spanned<Self>>,
     ),
     Break,
-    Let(Vec<Decl>, Box<Spanned<Self>>),
+    Let(Vec<Spanned<Decl>>, Box<Spanned<Self>>),
     Array(
         // type, size, init
         Symbol,
@@ -126,7 +126,7 @@ pub fn parser<'src>() -> impl Parser<
                 .repeated()
                 .at_least(1)
                 .collect()
-                .map(Decl::Type)
+                .map_with(|ds, e| (Decl::Type(ds), e.span()))
                 .boxed();
 
             let vardec = just(Token::Var)
@@ -139,7 +139,7 @@ pub fn parser<'src>() -> impl Parser<
                 )
                 .then_ignore(just(Token::Ctrl(":=")))
                 .then(expr.clone())
-                .map(|((id, ty), init)| Decl::Var(id, ty, Box::new(init)))
+                .map_with(|((id, ty), init), e| (Decl::Var(id, ty, Box::new(init)), e.span()))
                 .boxed();
 
             let fundec = just(Token::Function)
@@ -162,7 +162,7 @@ pub fn parser<'src>() -> impl Parser<
                 .repeated()
                 .at_least(1)
                 .collect()
-                .map(Decl::Func)
+                .map_with(|ds, e| (Decl::Func(ds), e.span()))
                 .boxed();
 
             tydec
@@ -397,10 +397,10 @@ end
         assert_matches!(expr, Some((e, _)) => {
             assert_matches!(e, Expr::Let(decls, e) => {
                 assert_matches!(decls.as_slice(), [
-                    Decl::Type(ts),
-                    Decl::Var(x, None, _),
-                    Decl::Var(y, Some(_), _),
-                    Decl::Func(fs)
+                    (Decl::Type(ts), _),
+                    (Decl::Var(x, None, _), _),
+                    (Decl::Var(y, Some(_), _), _),
+                    (Decl::Func(fs), _),
                 ] => {
                     assert_eq!(ts.len(), 2);
                     assert_eq!(Some(*x), symt.get("x"));

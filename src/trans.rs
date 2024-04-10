@@ -23,6 +23,16 @@ macro_rules! check_type {
     }};
 }
 
+macro_rules! undefined_symbol {
+    ($sym:expr, $kind:expr, $span:expr, $errs:ident) => {{
+        $errs.push((
+            format!("cannot find {}", $kind),
+            format!("{} is not defined here", $sym),
+            $span,
+        ));
+    }};
+}
+
 pub fn trans_exp(
     symt: &Rodeo,
     venv: &VEnv,
@@ -77,11 +87,7 @@ fn inner(
                     ((), types::Type::Int)
                 }
             } else {
-                errs.push((
-                    format!("cannot find function"),
-                    format!("{} is not defined here", symt.resolve(&f)),
-                    *span,
-                ));
+                undefined_symbol!(symt.resolve(&f), "function", *span, errs);
                 ((), types::Type::Int)
             }
         }
@@ -138,7 +144,7 @@ fn inner(
             let (venv2, tenv2) = decls
                 .iter()
                 .fold((venv.clone(), tenv.clone()), |(ve, te), decl| {
-                    trans_dec(&ve, &te, decl, errs)
+                    trans_dec(symt, &ve, &te, decl, errs)
                 });
             let (_, t) = inner(symt, &venv2, &tenv2, &e, errs);
             ((), t)
@@ -160,11 +166,7 @@ fn inner(
                     ((), types::Type::Int)
                 }
             } else {
-                errs.push((
-                    format!("cannot find type"),
-                    format!("{} is not defined here", symt.resolve(atys)),
-                    *span,
-                ));
+                undefined_symbol!(symt.resolve(atys), "type", *span, errs);
                 ((), types::Type::Int)
             }
         }
@@ -184,11 +186,7 @@ fn trans_var(
             if let Some(entry) = venv.get(sym) {
                 if let types::EnvEntry::Var(ty) = entry {
                     let ty = ty.resolve().unwrap_or_else(|sym| {
-                        errs.push((
-                            format!("cannot find type"),
-                            format!("{} is not defined here", symt.resolve(&sym)),
-                            *span,
-                        ));
+                        undefined_symbol!(symt.resolve(&sym), "type", *span, errs);
                         types::Type::Int
                     });
                     ((), ty)
@@ -201,11 +199,7 @@ fn trans_var(
                     ((), types::Type::Int)
                 }
             } else {
-                errs.push((
-                    format!("cannot find variable"),
-                    format!("{} is not defined here", symt.resolve(sym)),
-                    *span,
-                ));
+                undefined_symbol!(symt.resolve(sym), "variable", *span, errs);
                 ((), types::Type::Int)
             }
         }
@@ -228,14 +222,115 @@ fn trans_var(
 }
 
 fn trans_dec(
+    symt: &Rodeo,
     venv: &VEnv,
     tenv: &TEnv,
     d: &Spanned<absyn::Decl>,
     errs: &mut Vec<Error>,
 ) -> (VEnv, TEnv) {
-    todo!()
+    let default = (venv.clone(), tenv.clone());
+    let (d, span) = d;
+    match d {
+        absyn::Decl::Var(sym, ty, init) => {
+            let (_, ity) = inner(symt, venv, tenv, init, errs);
+            if let Some((tysym, tyspan)) = ty {
+                let ty = tenv.get(tysym).map(|t| t.resolve());
+                if let Some(Ok(ty)) = ty {
+                    check_type!(ity, ty, *tyspan, errs);
+                } else {
+                    undefined_symbol!(symt.resolve(tysym), "type", *tyspan, errs);
+                    return default;
+                }
+            }
+            (venv.insert(*sym, types::EnvEntry::Var(ity)), tenv.clone())
+        }
+        absyn::Decl::Func(fs) => {
+            let ftypes = fs
+                .iter()
+                .map(|(f, sp)| {
+                    let ret_ty = f.result.map_or(Some(types::Type::Unit), |t| {
+                        tenv.get(&t).and_then(|t| t.resolve().ok())
+                    });
+                    let ret_ty = ret_ty.unwrap_or_else(|| {
+                        undefined_symbol!(symt.resolve(&f.result.unwrap()), "type", *sp, errs);
+                        types::Type::Int
+                    });
+
+                    let args_tys = f
+                        .args
+                        .iter()
+                        .map(|(_, tysym)| {
+                            tenv.get(tysym)
+                                .and_then(|t| t.resolve().ok())
+                                .unwrap_or_else(|| {
+                                    undefined_symbol!(symt.resolve(tysym), "type", *sp, errs);
+                                    types::Type::Int
+                                })
+                        })
+                        .collect::<Vec<_>>();
+
+                    (f, args_tys, ret_ty)
+                })
+                .collect::<Vec<_>>();
+
+            let venv2 = ftypes
+                .iter()
+                .fold(venv.clone(), |env, (f, args_tys, ret_ty)| {
+                    env.insert(
+                        f.id,
+                        types::EnvEntry::Func(args_tys.clone(), ret_ty.clone()),
+                    )
+                });
+
+            for (f, args_tys, ret_ty) in ftypes {
+                let venv3 = args_tys
+                    .iter()
+                    .zip(f.args.iter())
+                    .fold(venv2.clone(), |env, (t, (argname, _))| {
+                        env.insert(*argname, types::EnvEntry::Var(t.clone()))
+                    });
+                let (_, ty) = inner(symt, &venv3, tenv, &f.body, errs);
+                check_type!(ret_ty, ty, f.body.1, errs);
+            }
+
+            (venv2, tenv.clone())
+        }
+        absyn::Decl::Type(ts) => {
+            let tenv2 = ts.iter().fold(tenv.clone(), |env, (name, _)| {
+                env.insert(*name, types::Type::Name(*name, None))
+            });
+            let tenv3 = ts.iter().fold(tenv2.clone(), |env, (name, ty)| {
+                env.insert(*name, trans_ty(symt, &tenv2, ty, errs))
+            });
+            (venv.clone(), tenv3)
+        }
+    }
 }
 
-fn trans_ty(tenv: &TEnv, t: &absyn::Type) -> types::Type {
-    todo!()
+fn trans_ty(
+    symt: &Rodeo,
+    tenv: &TEnv,
+    t: &Spanned<absyn::Type>,
+    errs: &mut Vec<Error>,
+) -> types::Type {
+    let (t, span) = t;
+    match t {
+        absyn::Type::Name(sym) => tenv.get(sym).map_or_else(
+            || {
+                undefined_symbol!(symt.resolve(sym), "type", *span, errs);
+                types::Type::Int
+            },
+            |t| t.clone(),
+        ),
+        absyn::Type::Array(sym) => {
+            let ety = tenv.get(sym).map_or_else(
+                || {
+                    undefined_symbol!(symt.resolve(sym), "type", *span, errs);
+                    types::Type::Int
+                },
+                |t| t.clone(),
+            );
+            types::Type::Array(Box::new(ety))
+        }
+    }
 }

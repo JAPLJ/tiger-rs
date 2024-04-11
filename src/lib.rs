@@ -1,7 +1,7 @@
 pub mod absyn;
 pub mod error;
 pub mod lex;
-pub mod trans;
+pub mod semant;
 pub mod types;
 
 #[cfg(test)]

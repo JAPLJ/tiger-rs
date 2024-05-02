@@ -109,3 +109,51 @@ fn alpha_dec(symt: &mut SymTable, env: &Env, d: &Decl) -> (Decl, Env) {
         Decl::Type(_) => (d.clone(), env.clone()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        alpha::alpha,
+        parse,
+        semant::trans_exp,
+        symtable::SymTable,
+        test_util::tokenize_ok,
+        typing::{Expr, TEnv, Type, VEnv},
+    };
+    use chumsky::prelude::*;
+
+    fn alpha_conv(prog: &str) -> (Expr, SymTable) {
+        let toks = tokenize_ok(prog);
+        let (expr, symt, errs) = parse!(toks);
+        assert!(errs.is_empty(), "parse error: {:?}", errs);
+        let mut symt = SymTable::from_rodeo(symt.unwrap());
+
+        let venv = VEnv::new();
+        let tenv = TEnv::new()
+            .insert(symt.get_or_intern("int"), Type::Int)
+            .insert(symt.get_or_intern("string"), Type::String);
+
+        let ((exp, _), errs) = trans_exp(&mut symt, &venv, &tenv, &expr.unwrap());
+        assert!(errs.is_empty(), "typecheck error: {:?}", errs);
+        let exp = alpha(&mut symt, &exp);
+        (exp, symt)
+    }
+
+    #[test]
+    fn check_alpha() {
+        let (e, symt) = alpha_conv(
+            r#"
+        let
+            var x := 0
+            function f(a: int, b: int): int = x + a + (
+                let
+                    var x := x + a
+                    function f(z: int): int = z + x
+                in x + f(b) end
+            )
+        in f(1, 2) end
+        "#,
+        );
+        println!("{}", e.display(&symt))
+    }
+}

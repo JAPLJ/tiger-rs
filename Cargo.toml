@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 ariadne = "0.4.0"
 chumsky = "1.0.0-alpha.7"
+itertools = "0.12.1"
 lasso = "0.7.2"
 rpds = "1.1.0"
 

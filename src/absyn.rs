@@ -1,5 +1,7 @@
 // Abstract Syntax + Parser
 
+use std::fmt;
+
 use chumsky::{input::SpannedInput, prelude::*};
 use lasso::{Rodeo, Spur};
 
@@ -23,6 +25,24 @@ pub enum BinOp {
     Le,
     Gt,
     Ge,
+}
+
+impl fmt::Display for BinOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let op = match self {
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Eq => "=",
+            BinOp::Neq => "<>",
+            BinOp::Lt => "<",
+            BinOp::Le => "<=",
+            BinOp::Gt => ">",
+            BinOp::Ge => ">=",
+        };
+        write!(f, "{}", op)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

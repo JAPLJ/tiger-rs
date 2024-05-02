@@ -394,7 +394,7 @@ mod tests {
 
     use super::{Error, ExpTy};
 
-    fn typecheck(prog: &str) -> (ExpTy, Vec<Error>) {
+    fn typecheck(prog: &str) -> (ExpTy, Vec<Error>, SymTable) {
         let toks = tokenize_ok(prog);
         let (expr, symt, errs) = parse!(toks);
         assert!(errs.is_empty(), "parse error: {:?}", errs);
@@ -405,7 +405,8 @@ mod tests {
             .insert(symt.get_or_intern("int"), Type::Int)
             .insert(symt.get_or_intern("string"), Type::String);
 
-        trans_exp(&mut symt, &venv, &tenv, &expr.unwrap())
+        let (expty, errs) = trans_exp(&mut symt, &venv, &tenv, &expr.unwrap());
+        (expty, errs, symt)
     }
 
     fn type_ok(prog: &str) -> bool {

@@ -3,6 +3,7 @@ use lasso::Rodeo;
 
 use crate::absyn::Symbol;
 
+#[derive(Debug, Clone)]
 pub struct SymTable {
     table: Rodeo,
     next_id: u64,

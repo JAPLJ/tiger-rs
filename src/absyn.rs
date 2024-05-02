@@ -3,12 +3,15 @@
 use chumsky::{input::SpannedInput, prelude::*};
 use lasso::{Rodeo, Spur};
 
-use crate::lex::{Span, Token};
+use crate::{
+    lex::{Span, Token},
+    typing::Type,
+};
 
 pub type Symbol = Spur;
 pub type Spanned<T> = (T, Span);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinOp {
     Add,
     Sub,
@@ -54,7 +57,7 @@ pub enum Expr {
     Let(Vec<Spanned<Decl>>, Box<Spanned<Self>>),
     Array(
         // type, size, init
-        Symbol,
+        Type,
         Box<Spanned<Self>>,
         Box<Spanned<Self>>,
     ),
@@ -66,23 +69,17 @@ pub enum Decl {
     Var(
         // name, type, init
         Symbol,
-        Option<Spanned<Symbol>>,
+        Option<Spanned<Type>>,
         Box<Spanned<Expr>>,
     ),
     Type(Vec<(Symbol, Spanned<Type>)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Type {
-    Name(Symbol),
-    Array(Symbol),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct Func {
     pub id: Symbol,
-    pub args: Vec<(Symbol, Symbol)>,
-    pub result: Option<Symbol>,
+    pub args: Vec<(Symbol, Type)>,
+    pub result: Option<Type>,
     pub body: Spanned<Expr>,
 }
 
@@ -107,15 +104,15 @@ pub fn parser<'src>() -> impl Parser<
                 .then(ident)
                 .map(|(arr, t)| {
                     if arr.is_some() {
-                        Type::Array(t)
+                        Type::Array(Box::new(Type::Name(t, None)))
                     } else {
-                        Type::Name(t)
+                        Type::Name(t, None)
                     }
                 });
 
             let tyfields = ident
                 .then_ignore(just(Token::Ctrl(":")))
-                .then(ident)
+                .then(ident.map(|t| Type::Name(t, None)))
                 .separated_by(just(Token::Ctrl(",")))
                 .collect();
 
@@ -134,7 +131,7 @@ pub fn parser<'src>() -> impl Parser<
                 .then(
                     just(Token::Ctrl(":"))
                         .ignore_then(ident)
-                        .map_with(|t, e| (t, e.span()))
+                        .map_with(|t, e| (Type::Name(t, None), e.span()))
                         .or_not(),
                 )
                 .then_ignore(just(Token::Ctrl(":=")))
@@ -145,7 +142,11 @@ pub fn parser<'src>() -> impl Parser<
             let fundec = just(Token::Function)
                 .ignore_then(ident)
                 .then(tyfields.delimited_by(just(Token::Ctrl("(")), just(Token::Ctrl(")"))))
-                .then(just(Token::Ctrl(":")).ignore_then(ident).or_not())
+                .then(
+                    just(Token::Ctrl(":"))
+                        .ignore_then(ident.map(|t| Type::Name(t, None)))
+                        .or_not(),
+                )
                 .then_ignore(just(Token::Op("=")))
                 .then(expr.clone())
                 .map_with(|(((id, args), ty), body), e| {
@@ -211,7 +212,9 @@ pub fn parser<'src>() -> impl Parser<
             )
             .then_ignore(just(Token::Of))
             .then(expr.clone())
-            .map(|((ty, size), init)| Expr::Array(ty, Box::new(size), Box::new(init)));
+            .map(|((ty, size), init)| {
+                Expr::Array(Type::Name(ty, None), Box::new(size), Box::new(init))
+            });
 
         let if_ = just(Token::If)
             .ignore_then(expr.clone())

@@ -1,14 +1,12 @@
-// Type Checker + Translator
-use lasso::Rodeo;
-
+// Type Checker
 use crate::{
-    absyn::{self, Spanned},
+    absyn::{BinOp, Decl as EDecl, Expr as EExpr, Spanned, Symbol, Var as EVar},
     error::GenericError,
-    types::{self, TEnv, VEnv},
+    symtable::SymTable,
+    typing::{self, Decl as TDecl, EnvEntry, Expr as TExpr, TEnv, Type, VEnv, Var as TVar},
 };
 
-pub type ExpTy = ((), types::Type);
-
+pub type ExpTy = (TExpr, Type);
 pub type Error = GenericError;
 
 macro_rules! check_type {
@@ -33,309 +31,352 @@ macro_rules! undefined_symbol {
     }};
 }
 
+macro_rules! trans_expect {
+    ($symt:expr, $venv:expr, $tenv:expr, $e:expr, $errs:ident, $exp_t:expr) => {{
+        let (te, et) = inner($symt, $venv, $tenv, $e, $errs);
+        check_type!(et, $exp_t, (*$e).1, $errs);
+        te
+    }};
+}
+
 pub fn trans_exp(
-    symt: &Rodeo,
+    symt: &mut SymTable,
     venv: &VEnv,
     tenv: &TEnv,
-    e: &Spanned<absyn::Expr>,
+    e: &Spanned<EExpr>,
 ) -> (ExpTy, Vec<Error>) {
     let mut errs = vec![];
     (inner(symt, venv, tenv, e, &mut errs), errs)
 }
 
 fn inner(
-    symt: &Rodeo,
+    symt: &mut SymTable,
     venv: &VEnv,
     tenv: &TEnv,
-    e: &Spanned<absyn::Expr>,
+    e: &Spanned<EExpr>,
     errs: &mut Vec<Error>,
 ) -> ExpTy {
     let (e, span) = e;
     match e {
-        absyn::Expr::Var(v) => trans_var(symt, venv, tenv, &(v.as_ref().clone(), *span), errs),
-        absyn::Expr::Nil => unimplemented!(),
-        absyn::Expr::Int(_) => ((), types::Type::Int),
-        absyn::Expr::Str(_) => ((), types::Type::String),
-        absyn::Expr::Call(f, args) => {
-            if let Some(ft) = venv.get(&f) {
-                if let types::EnvEntry::Func(aty, rty) = ft {
+        EExpr::Var(v) => {
+            let (tv, vt) = trans_var(symt, venv, tenv, &(v.as_ref().clone(), *span), errs);
+            (TExpr::Var(Box::new(tv)), vt)
+        }
+        EExpr::Nil => unimplemented!(),
+        EExpr::Int(x) => (TExpr::Int(*x), Type::Int),
+        EExpr::Str(s) => (TExpr::Str(s.to_string()), Type::String),
+        EExpr::Call(f, args) => {
+            if let Some(ft) = venv.get(f) {
+                if let EnvEntry::Func(aty, rty) = ft {
                     if args.len() != aty.len() {
                         errs.push(GenericError(
                             format!("unexpected number of arguments"),
                             format!("expected {} arguments, found {}", aty.len(), args.len()),
                             *span,
                         ));
-                        ((), rty.clone())
+                        (TExpr::Int(0), rty.clone())
                     } else {
-                        let _args = args
-                            .iter()
-                            .zip(aty)
-                            .map(|(a, ty)| {
-                                let (_, t) = inner(symt, venv, tenv, a, errs);
-                                check_type!(t, *ty, a.1, errs);
-                                ((), t)
-                            })
-                            .collect::<Vec<_>>();
-                        ((), rty.clone())
+                        let mut targs = vec![];
+                        for (a, ty) in args.iter().zip(aty) {
+                            targs.push(trans_expect!(symt, venv, tenv, a, errs, *ty));
+                        }
+                        (TExpr::Call(f.clone(), targs), rty.clone())
                     }
                 } else {
                     errs.push(GenericError(
                         format!("call expression requires function"),
-                        format!("{} has type {:?}", symt.resolve(&f), ft),
+                        format!("{} has type {:?}", symt.resolve(f), ft),
                         *span,
                     ));
-                    ((), types::Type::Int)
+                    (TExpr::Int(0), Type::Int)
                 }
             } else {
-                undefined_symbol!(symt.resolve(&f), "function", *span, errs);
-                ((), types::Type::Int)
+                undefined_symbol!(symt.resolve(f), "function", *span, errs);
+                (TExpr::Int(0), Type::Int)
             }
         }
-        absyn::Expr::BinOp(lhs, _op, rhs) => {
-            let (_, lt) = inner(symt, venv, tenv, lhs.as_ref(), errs);
-            let (_, rt) = inner(symt, venv, tenv, rhs.as_ref(), errs);
-            check_type!(lt, types::Type::Int, (*lhs).1, errs);
-            check_type!(rt, types::Type::Int, (*rhs).1, errs);
-            ((), types::Type::Int)
+        EExpr::BinOp(lhs, op, rhs) => {
+            let lhs = trans_expect!(symt, venv, tenv, lhs, errs, Type::Int);
+            let rhs = trans_expect!(symt, venv, tenv, rhs, errs, Type::Int);
+            (TExpr::BinOp(Box::new(lhs), *op, Box::new(rhs)), Type::Int)
         }
-        absyn::Expr::Seq(es) => es
-            .iter()
-            .map(|e| inner(symt, venv, tenv, e, errs))
-            .last()
-            .unwrap_or(((), types::Type::Unit)),
-        absyn::Expr::Assign(v, e) => {
-            let (_, vt) = trans_var(symt, venv, tenv, &v, errs);
-            let (_, et) = inner(symt, venv, tenv, &e, errs);
-            check_type!(et, vt, (*e).1, errs);
-            ((), types::Type::Unit)
+        EExpr::Seq(es) => {
+            let mut es2 = vec![];
+            let mut last_type = Type::Unit;
+            for e in es {
+                let (te, tt) = inner(symt, venv, tenv, e, errs);
+                es2.push(te);
+                last_type = tt;
+            }
+            (TExpr::Seq(es2), last_type)
         }
-        absyn::Expr::If(cond, th, el) => {
-            let (_, ct) = inner(symt, venv, tenv, &cond, errs);
-            check_type!(ct, types::Type::Int, (*cond).1, errs);
-            let (_, tt) = inner(symt, venv, tenv, &th, errs);
+        EExpr::Assign(v, x) => {
+            let (tv, vt) = trans_var(symt, venv, tenv, v, errs);
+            let tx = trans_expect!(symt, venv, tenv, x, errs, vt);
+            (TExpr::Assign(Box::new(tv), Box::new(tx)), Type::Unit)
+        }
+        EExpr::If(cond, th, el) => {
+            let cond = trans_expect!(symt, venv, tenv, cond, errs, Type::Int);
+            let (th, tt) = inner(symt, venv, tenv, th, errs);
             if let Some(el) = el {
-                let (_, et) = inner(symt, venv, tenv, &el, errs);
-                check_type!(tt, et, (*el).1, errs);
-                ((), tt)
+                let el = trans_expect!(symt, venv, tenv, el, errs, tt);
+                (
+                    TExpr::If(Box::new(cond), Box::new(th), Some(Box::new(el))),
+                    tt,
+                )
             } else {
-                ((), types::Type::Unit)
+                (TExpr::If(Box::new(cond), Box::new(th), None), Type::Unit)
             }
         }
-        absyn::Expr::While(cond, e) => {
-            let (_, ct) = inner(symt, venv, tenv, &cond, errs);
-            check_type!(ct, types::Type::Int, (*cond).1, errs);
-            let _ = inner(symt, venv, tenv, &e, errs);
-            ((), types::Type::Unit)
+        EExpr::While(cond, body) => {
+            let cond = trans_expect!(symt, venv, tenv, cond, errs, Type::Int);
+            let (body, _) = inner(symt, venv, tenv, body, errs);
+            (TExpr::While(Box::new(cond), Box::new(body)), Type::Unit)
         }
-        absyn::Expr::For(v, from, to, e) => {
-            let (_, ft) = inner(symt, venv, tenv, &from, errs);
-            let (_, tt) = inner(symt, venv, tenv, &to, errs);
-            check_type!(ft, types::Type::Int, (*from).1, errs);
-            check_type!(tt, types::Type::Int, (*to).1, errs);
-            let venv2 = venv.insert(*v, types::EnvEntry::Var(types::Type::Int));
-            let _ = inner(symt, &venv2, tenv, &e, errs);
-            ((), types::Type::Unit)
+        EExpr::For(v, fr, to, body) => {
+            let fr = trans_expect!(symt, venv, tenv, fr, errs, Type::Int);
+            let to = trans_expect!(symt, venv, tenv, to, errs, Type::Int);
+            let venv2 = venv.insert(*v, EnvEntry::Var(Type::Int));
+            let (body, _) = inner(symt, &venv2, tenv, body, errs);
+
+            // convert for-loop to while-loop
+            // for v := f to t do body
+            // =>
+            // let v := f, t := t in
+            //   while v != t do { body; v := v + 1 }
+            let tv = symt.new_sym();
+            fn simple_ref(x: Symbol) -> Box<TExpr> {
+                Box::new(TExpr::Var(Box::new(TVar::Simple(x))))
+            }
+            (
+                TExpr::Let(
+                    vec![TDecl::Var(*v, Type::Int, fr), TDecl::Var(tv, Type::Int, to)],
+                    Box::new(TExpr::While(
+                        Box::new(TExpr::BinOp(simple_ref(*v), BinOp::Neq, simple_ref(tv))),
+                        Box::new(TExpr::Seq(vec![
+                            body,
+                            TExpr::Assign(
+                                Box::new(TVar::Simple(*v)),
+                                Box::new(TExpr::BinOp(
+                                    simple_ref(*v),
+                                    BinOp::Add,
+                                    Box::new(TExpr::Int(1)),
+                                )),
+                            ),
+                        ])),
+                    )),
+                ),
+                Type::Unit,
+            )
         }
-        absyn::Expr::Break => {
+        EExpr::Break => {
             // TODO: check if inside a loop
-            ((), types::Type::Unit)
+            (TExpr::Break, Type::Unit)
         }
-        absyn::Expr::Let(decls, e) => {
-            let (venv2, tenv2) = decls
-                .iter()
-                .fold((venv.clone(), tenv.clone()), |(ve, te), decl| {
-                    trans_dec(symt, &ve, &te, decl, errs)
-                });
-            let (_, t) = inner(symt, &venv2, &tenv2, &e, errs);
-            ((), t)
+        EExpr::Let(decls, e2) => {
+            let mut tdecls = vec![];
+            let (venv2, tenv2) =
+                decls
+                    .iter()
+                    .fold((venv.clone(), tenv.clone()), |(ve, te), decl| {
+                        let (td, ve, te) = trans_dec(symt, &ve, &te, decl, errs);
+                        tdecls.push(td);
+                        (ve, te)
+                    });
+            let (e2, t) = inner(symt, &venv2, &tenv2, e2, errs);
+            (TExpr::Let(tdecls, Box::new(e2)), t)
         }
-        absyn::Expr::Array(atys, size, init) => {
-            if let Some(aty) = tenv.get(&atys) {
-                if let types::Type::Array(ety) = aty {
-                    let (_, st) = inner(symt, venv, tenv, &size, errs);
-                    check_type!(st, types::Type::Int, (*size).1, errs);
-                    let (_, it) = inner(symt, venv, tenv, &init, errs);
-                    check_type!(it, **ety, (*init).1, errs);
-                    ((), aty.clone())
+        EExpr::Array(atys, size, init) => {
+            if let Ok(aty) = atys.resolve(tenv) {
+                if let Type::Array(ref ety) = aty {
+                    let size = trans_expect!(symt, venv, tenv, size, errs, Type::Int);
+                    let init = trans_expect!(symt, venv, tenv, init, errs, **ety);
+                    (
+                        TExpr::Array(aty.clone(), Box::new(size), Box::new(init)),
+                        aty.clone(),
+                    )
                 } else {
-                    errs.push(GenericError(
-                        format!("cannot create array"),
-                        format!("{} has type {:?}, not array", symt.resolve(atys), aty),
-                        *span,
-                    ));
-                    ((), types::Type::Int)
+                    if let Type::Name(nm, _) = atys {
+                        errs.push(GenericError(
+                            format!("cannot create array"),
+                            format!("{} has type {:?}, not array", symt.resolve(nm), aty),
+                            *span,
+                        ));
+                    }
+                    (TExpr::Int(0), Type::Int)
                 }
             } else {
-                undefined_symbol!(symt.resolve(atys), "type", *span, errs);
-                ((), types::Type::Int)
+                if let Type::Name(nm, _) = atys {
+                    undefined_symbol!(symt.resolve(nm), "type", *span, errs);
+                }
+                (TExpr::Int(0), Type::Int)
             }
         }
     }
 }
 
 fn trans_var(
-    symt: &Rodeo,
+    symt: &mut SymTable,
     venv: &VEnv,
     tenv: &TEnv,
-    v: &Spanned<absyn::Var>,
+    v: &Spanned<EVar>,
     errs: &mut Vec<Error>,
-) -> ExpTy {
+) -> (TVar, Type) {
     let (v, span) = v;
     match v {
-        absyn::Var::Simple(sym) => {
-            if let Some(entry) = venv.get(sym) {
-                if let types::EnvEntry::Var(ty) = entry {
-                    let ty = ty.resolve().unwrap_or_else(|sym| {
-                        undefined_symbol!(symt.resolve(&sym), "type", *span, errs);
-                        types::Type::Int
+        EVar::Simple(s) => {
+            if let Some(ee) = venv.get(s) {
+                if let EnvEntry::Var(ty) = ee {
+                    let ty = ty.resolve(tenv).unwrap_or_else(|nm| {
+                        undefined_symbol!(symt.resolve(&nm), "type", *span, errs);
+                        Type::Int
                     });
-                    ((), ty)
+                    (TVar::Simple(*s), ty)
                 } else {
                     errs.push(GenericError(
                         format!("function is not a variable"),
-                        format!("{} is function, not variable", symt.resolve(sym)),
+                        format!("{} is function, not variable", symt.resolve(s)),
                         *span,
                     ));
-                    ((), types::Type::Int)
+                    (TVar::Simple(*s), Type::Int)
                 }
             } else {
-                undefined_symbol!(symt.resolve(sym), "variable", *span, errs);
-                ((), types::Type::Int)
+                undefined_symbol!(symt.resolve(s), "variable", *span, errs);
+                (TVar::Simple(*s), Type::Int)
             }
         }
-        absyn::Var::Subscript(arr, ix) => {
-            let (_, aty) = trans_var(symt, venv, tenv, arr, errs);
-            if let types::Type::Array(ety) = aty {
-                let (_, ity) = inner(symt, venv, tenv, ix, errs);
-                check_type!(ity, types::Type::Int, ix.1, errs);
-                ((), *ety)
+        EVar::Subscript(arr, ix) => {
+            let (arr, aty) = trans_var(symt, venv, tenv, arr, errs);
+            if let Type::Array(ety) = aty {
+                let ix = trans_expect!(symt, venv, tenv, ix, errs, Type::Int);
+                (TVar::Subscript(Box::new(arr), ix), *ety)
             } else {
                 errs.push(GenericError(
                     format!("subscript requires array"),
                     format!("this has type {:?}", aty),
                     *span,
                 ));
-                ((), types::Type::Int)
+                (TVar::Subscript(Box::new(arr), TExpr::Int(0)), Type::Int)
             }
         }
     }
 }
 
 fn trans_dec(
-    symt: &Rodeo,
+    symt: &mut SymTable,
     venv: &VEnv,
     tenv: &TEnv,
-    d: &Spanned<absyn::Decl>,
+    d: &Spanned<EDecl>,
     errs: &mut Vec<Error>,
-) -> (VEnv, TEnv) {
-    let default = (venv.clone(), tenv.clone());
+) -> (TDecl, VEnv, TEnv) {
     let (d, _span) = d;
     match d {
-        absyn::Decl::Var(sym, ty, init) => {
-            let (_, ity) = inner(symt, venv, tenv, init, errs);
-            if let Some((tysym, tyspan)) = ty {
-                let ty = tenv.get(tysym).map(|t| t.resolve());
-                if let Some(Ok(ty)) = ty {
-                    check_type!(ity, ty, init.1, errs);
-                } else {
-                    undefined_symbol!(symt.resolve(tysym), "type", *tyspan, errs);
-                    return default;
-                }
-            }
-            (venv.insert(*sym, types::EnvEntry::Var(ity)), tenv.clone())
-        }
-        absyn::Decl::Func(fs) => {
-            let ftypes = fs
-                .iter()
-                .map(|(f, sp)| {
-                    let ret_ty = f.result.map_or(Some(types::Type::Unit), |t| {
-                        tenv.get(&t).and_then(|t| t.resolve().ok())
-                    });
-                    let ret_ty = ret_ty.unwrap_or_else(|| {
-                        undefined_symbol!(symt.resolve(&f.result.unwrap()), "type", *sp, errs);
-                        types::Type::Int
-                    });
-
-                    let args_tys = f
-                        .args
-                        .iter()
-                        .map(|(_, tysym)| {
-                            tenv.get(tysym)
-                                .and_then(|t| t.resolve().ok())
-                                .unwrap_or_else(|| {
-                                    undefined_symbol!(symt.resolve(tysym), "type", *sp, errs);
-                                    types::Type::Int
-                                })
+        EDecl::Var(v, ty, init) => {
+            let (init, ity) = {
+                let spec_ty = ty.as_ref().and_then(|(ty, tyspan)| {
+                    ty.resolve(tenv)
+                        .inspect_err(|nm| {
+                            undefined_symbol!(symt.resolve(nm), "type", *tyspan, errs);
                         })
-                        .collect::<Vec<_>>();
-
-                    (f, args_tys, ret_ty)
-                })
-                .collect::<Vec<_>>();
+                        .ok()
+                });
+                if let Some(spec_ty) = spec_ty {
+                    (
+                        trans_expect!(symt, venv, tenv, init, errs, spec_ty),
+                        spec_ty,
+                    )
+                } else {
+                    inner(symt, venv, tenv, init, errs)
+                }
+            };
+            (
+                TDecl::Var(*v, ity.clone(), init),
+                venv.insert(*v, EnvEntry::Var(ity)),
+                tenv.clone(),
+            )
+        }
+        EDecl::Func(fs) => {
+            let ftypes = {
+                let mut ftypes = vec![];
+                for (f, sp) in fs {
+                    let ret_ty = f.result.as_ref().map_or(Type::Unit, |t| {
+                        t.resolve(tenv).unwrap_or_else(|nm| {
+                            undefined_symbol!(symt.resolve(&nm), "type", *sp, errs);
+                            Type::Int
+                        })
+                    });
+                    let mut args_tys = vec![];
+                    for (_, aty) in &f.args {
+                        args_tys.push(aty.resolve(tenv).unwrap_or_else(|nm| {
+                            undefined_symbol!(symt.resolve(&nm), "type", *sp, errs);
+                            Type::Int
+                        }));
+                    }
+                    ftypes.push((f, args_tys, ret_ty));
+                }
+                ftypes
+            };
 
             let venv2 = ftypes
                 .iter()
                 .fold(venv.clone(), |env, (f, args_tys, ret_ty)| {
-                    env.insert(
-                        f.id,
-                        types::EnvEntry::Func(args_tys.clone(), ret_ty.clone()),
-                    )
+                    env.insert(f.id, EnvEntry::Func(args_tys.clone(), ret_ty.clone()))
                 });
 
+            let mut tfs = vec![];
             for (f, args_tys, ret_ty) in ftypes {
-                let venv3 = args_tys
-                    .iter()
-                    .zip(f.args.iter())
-                    .fold(venv2.clone(), |env, (t, (argname, _))| {
-                        env.insert(*argname, types::EnvEntry::Var(t.clone()))
-                    });
-                let (_, ty) = inner(symt, &venv3, tenv, &f.body, errs);
-                check_type!(ret_ty, ty, f.body.1, errs);
+                let mut args = vec![];
+                let venv3 = args_tys.iter().zip(f.args.iter()).fold(
+                    venv2.clone(),
+                    |env, (t, (argname, _))| {
+                        args.push((*argname, t.clone()));
+                        env.insert(*argname, EnvEntry::Var(t.clone()))
+                    },
+                );
+                let body = trans_expect!(symt, &venv3, tenv, &f.body, errs, ret_ty);
+                tfs.push(typing::Func {
+                    id: f.id,
+                    args,
+                    result: ret_ty.clone(),
+                    body,
+                });
             }
 
-            (venv2, tenv.clone())
+            (TDecl::Func(tfs), venv2, tenv.clone())
         }
-        absyn::Decl::Type(ts) => {
-            let tenv2 = ts.iter().fold(tenv.clone(), |env, (name, _)| {
-                env.insert(*name, types::Type::Name(*name, None))
-            });
-            let tenv3 = ts.iter().fold(tenv2.clone(), |env, (name, ty)| {
-                env.insert(*name, trans_ty(symt, &tenv2, ty, errs))
-            });
+        EDecl::Type(ts) => {
+            let mut tenv2 = tenv.clone();
+            let mut done = 0;
+            while done < ts.len() {
+                let mut updated = false;
+                for (nm, (t, _)) in ts {
+                    if tenv2.contains_key(nm) {
+                        continue;
+                    }
+                    if let Ok(t) = t.resolve(&tenv2) {
+                        tenv2.insert_mut(*nm, t);
+                        done += 1;
+                        updated = true;
+                    }
+                }
+                if !updated {
+                    break;
+                }
+            }
 
-            // TODO: check dependencies appropriately
-            let tenv4 = ts.iter().fold(tenv3.clone(), |env, (name, _)| {
-                env.insert(*name, env.get(name).unwrap().fill(&tenv3).unwrap())
-            });
-            (venv.clone(), tenv4)
-        }
-    }
-}
-
-fn trans_ty(
-    symt: &Rodeo,
-    tenv: &TEnv,
-    t: &Spanned<absyn::Type>,
-    errs: &mut Vec<Error>,
-) -> types::Type {
-    let (t, span) = t;
-    match t {
-        absyn::Type::Name(sym) => tenv.get(sym).map_or_else(
-            || {
-                undefined_symbol!(symt.resolve(sym), "type", *span, errs);
-                types::Type::Int
-            },
-            |t| t.clone(),
-        ),
-        absyn::Type::Array(sym) => {
-            let ety = tenv.get(sym).map_or_else(
-                || {
-                    undefined_symbol!(symt.resolve(sym), "type", *span, errs);
-                    types::Type::Int
-                },
-                |t| t.clone(),
-            );
-            types::Type::Array(Box::new(ety))
+            let mut tts = vec![];
+            for (nm, (_, tspan)) in ts {
+                if let Some(t) = tenv2.get(nm) {
+                    tts.push((*nm, t.clone()));
+                } else {
+                    errs.push(GenericError(
+                        format!("cannot resolve type"),
+                        format!("{} does not resolve into type", symt.resolve(nm)),
+                        *tspan,
+                    ));
+                }
+            }
+            (TDecl::Type(tts), venv.clone(), tenv2)
         }
     }
 }
@@ -344,25 +385,27 @@ fn trans_ty(
 mod tests {
     use crate::{
         parse,
+        semant::trans_exp,
+        symtable::SymTable,
         test_util::tokenize_ok,
-        types::{self, TEnv, VEnv},
+        typing::{TEnv, Type, VEnv},
     };
     use chumsky::prelude::*;
 
-    use super::{trans_exp, Error, ExpTy};
+    use super::{Error, ExpTy};
 
     fn typecheck(prog: &str) -> (ExpTy, Vec<Error>) {
         let toks = tokenize_ok(prog);
         let (expr, symt, errs) = parse!(toks);
         assert!(errs.is_empty(), "parse error: {:?}", errs);
-        let mut symt = symt.unwrap();
+        let mut symt = SymTable::from_rodeo(symt.unwrap());
 
         let venv = VEnv::new();
         let tenv = TEnv::new()
-            .insert(symt.get_or_intern("int"), types::Type::Int)
-            .insert(symt.get_or_intern("string"), types::Type::String);
+            .insert(symt.get_or_intern("int"), Type::Int)
+            .insert(symt.get_or_intern("string"), Type::String);
 
-        trans_exp(&symt, &venv, &tenv, &expr.unwrap())
+        trans_exp(&mut symt, &venv, &tenv, &expr.unwrap())
     }
 
     fn type_ok(prog: &str) -> bool {

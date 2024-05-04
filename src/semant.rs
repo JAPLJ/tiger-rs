@@ -329,7 +329,7 @@ fn trans_dec(
                 let venv3 = args_tys.iter().zip(f.args.iter()).fold(
                     venv2.clone(),
                     |env, (t, (argname, _))| {
-                        args.push((*argname, t.clone()));
+                        args.push((*argname, t.clone(), false));
                         env.insert(*argname, EnvEntry::Var(t.clone()))
                     },
                 );

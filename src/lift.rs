@@ -132,7 +132,7 @@ impl<'a> LambdaLift<'a> {
                 let mut fs_new_args = vec![];
                 for f in fs {
                     let mut fv = self.free_exp(&f.body);
-                    for (a, _) in &f.args {
+                    for (a, _, _) in &f.args {
                         fv.remove(a);
                     }
 
@@ -142,7 +142,8 @@ impl<'a> LambdaLift<'a> {
                     for v in fv {
                         if let Some(EnvEntry::Var(ty)) = venv.get(&v) {
                             let nv = self.symt.new_sym();
-                            new_args.push((nv, ty.clone()));
+                            // call-by-reference for lifted args
+                            new_args.push((nv, ty.clone(), true));
                             renv2.insert_mut(v, nv);
                             fv_names.push(v);
                         } else {
@@ -159,7 +160,7 @@ impl<'a> LambdaLift<'a> {
                 }
 
                 for (f, (renv2, nargs)) in fs.iter().zip(fs_new_args) {
-                    let venv2 = f.args.iter().fold(venv.clone(), |venv, (a, ty)| {
+                    let venv2 = f.args.iter().fold(venv.clone(), |venv, (a, ty, _)| {
                         venv.insert(*a, EnvEntry::Var(ty.clone()))
                     });
                     tfs.push(Func {
@@ -241,7 +242,7 @@ impl<'a> LambdaLift<'a> {
                 let mut fvs = vec![];
                 for f in fs {
                     let mut fv = self.free_exp(&f.body);
-                    for (a, _) in &f.args {
+                    for (a, _, _) in &f.args {
                         fv.remove(a);
                     }
                     fvs.push(fv);

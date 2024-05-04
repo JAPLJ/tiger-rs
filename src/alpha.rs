@@ -91,9 +91,9 @@ fn alpha_dec(symt: &mut SymTable, env: &Env, d: &Decl) -> (Decl, Env) {
             let mut tfs = vec![];
             for f in fs {
                 let mut targs = vec![];
-                let env2 = f.args.iter().fold(env.clone(), |env, (arg, argty)| {
+                let env2 = f.args.iter().fold(env.clone(), |env, (arg, argty, rf)| {
                     let new_argname = symt.new_sym();
-                    targs.push((new_argname, argty.clone()));
+                    targs.push((new_argname, argty.clone(), *rf));
                     env.insert(*arg, new_argname)
                 });
                 let body = inner(symt, &env2, &f.body);

@@ -107,7 +107,12 @@ impl Expr {
                         symt.resolve(&func.id),
                         func.args
                             .iter()
-                            .map(|(a, aty)| format!("{}: {}", symt.resolve(a), aty))
+                            .map(|(a, aty, r)| format!(
+                                "{}: {}{}",
+                                symt.resolve(a),
+                                if *r { "&" } else { "" },
+                                aty
+                            ))
                             .join(", "),
                         func.result,
                         func.body.display(symt)
@@ -228,7 +233,8 @@ pub enum Decl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Func {
     pub id: Symbol,
-    pub args: Vec<(Symbol, Type)>,
+    // name, type, ref
+    pub args: Vec<(Symbol, Type, bool)>,
     pub result: Type,
     pub body: Expr,
 }

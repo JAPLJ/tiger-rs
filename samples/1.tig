@@ -1,0 +1,11 @@
+let
+    var a: int := 0
+    function f(x: int, y: int): int =
+        let
+            function g(z: int): int = a + x + z
+        in
+            x + g(y)
+        end
+in
+    f(1, 2)
+end

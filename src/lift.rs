@@ -88,10 +88,10 @@ impl<'a> LambdaLift<'a> {
                         .iter()
                         .fold((venv.clone(), fenv.clone()), |(venv, env), decl| {
                             let (td, venv, env) = self.lift_dec(&venv, renv, &env, decl);
-                            if let Decl::Func(fs) = td {
-                                self.top_fn.extend(fs);
-                            } else {
-                                tdecls.push(td);
+                            match td {
+                                Decl::Func(fs) => self.top_fn.extend(fs),
+                                Decl::Var(..) => tdecls.push(td),
+                                Decl::Type(_) => {}
                             }
                             (venv, env)
                         });

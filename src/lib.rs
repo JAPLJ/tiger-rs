@@ -1,6 +1,7 @@
 pub mod absyn;
 pub mod alpha;
 pub mod error;
+pub mod ir;
 pub mod lex;
 pub mod lift;
 pub mod semant;

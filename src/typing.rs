@@ -1,3 +1,4 @@
+use inkwell::{context::Context, types::BasicTypeEnum, AddressSpace};
 use itertools::Itertools;
 use rpds::HashTrieMap;
 use std::fmt;
@@ -30,6 +31,16 @@ impl Type {
                     tenv.get(nm).cloned().ok_or(*nm)
                 }
             }
+        }
+    }
+
+    pub fn as_llvm_type<'ctx>(&self, ctx: &'ctx Context) -> BasicTypeEnum<'ctx> {
+        match self {
+            Type::Int => BasicTypeEnum::IntType(ctx.i64_type()),
+            Type::String => BasicTypeEnum::PointerType(ctx.ptr_type(AddressSpace::default())),
+            Type::Array(_) => BasicTypeEnum::PointerType(ctx.ptr_type(AddressSpace::default())),
+            Type::Unit => BasicTypeEnum::PointerType(ctx.ptr_type(AddressSpace::default())),
+            Type::Name(..) => panic!("unexpected error: type resolved"),
         }
     }
 }

@@ -10,6 +10,7 @@ use inkwell::{
     },
     AddressSpace, IntPredicate,
 };
+use lasso::Key;
 use rpds::HashTrieMap;
 
 use crate::{
@@ -428,7 +429,7 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
             let fn_type = result_type.fn_type(&arg_types[..], false);
             let func = self
                 .module
-                .add_function(&format!("f{:?}", f.id), fn_type, None);
+                .add_function(&format!("f{}", f.id.into_usize()), fn_type, None);
             funcs.push(func);
             self.env.insert_mut(f.id, EnvEntry::Func(func, arg_refs));
         }

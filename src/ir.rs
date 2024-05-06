@@ -99,23 +99,6 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
         b.build_alloca(ty, name).unwrap()
     }
 
-    fn create_entry_block_array_alloca<T: BasicType<'ctx>>(
-        &self,
-        ty: T,
-        size: IntValue<'ctx>,
-        name: &str,
-    ) -> PointerValue<'ctx> {
-        let b = self.ctx.create_builder();
-        let entry = self.cur_func().get_first_basic_block().unwrap();
-
-        match entry.get_first_instruction() {
-            Some(instr) => b.position_before(&instr),
-            None => b.position_at_end(entry),
-        }
-
-        b.build_array_alloca(ty, size, name).unwrap()
-    }
-
     fn cur_func(&self) -> FunctionValue<'ctx> {
         self.cur_func.unwrap()
     }
@@ -305,6 +288,7 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
                     phi.add_incoming(&[(&then_val, then_bb), (&else_val, else_bb)]);
                     Ok(phi.as_basic_value())
                 } else {
+                    self.builder.build_unconditional_branch(cont_bb)?;
                     self.builder.position_at_end(cont_bb);
                     Ok(self.unit())
                 }
@@ -362,7 +346,7 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
                     let size = ensure_int!(self.gen_exp(size)?);
                     let init = self.gen_exp(init)?;
                     let ety = ety.as_llvm_type(self.ctx);
-                    let arr = self.create_entry_block_array_alloca(ety, size, "arr");
+                    let arr = self.builder.build_array_alloca(ety, size, "arr")?;
 
                     let i64_type = self.ctx.i64_type();
                     let p = self.create_entry_block_alloca(i64_type, "init_counter_p");
@@ -371,12 +355,11 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
                     let par = self.cur_func();
                     let loop_bb = self.ctx.append_basic_block(par, "init_loop");
                     let after_bb = self.ctx.append_basic_block(par, "after");
+                    self.builder.build_unconditional_branch(loop_bb)?;
                     self.builder.position_at_end(loop_bb);
                     let pi = ensure_int!(self.builder.build_load(i64_type, p, "init_counter")?);
-                    let arr_i = unsafe {
-                        self.builder
-                            .build_gep(ety, arr, &[i64_type.const_zero(), pi], "arr_i")?
-                    };
+                    let arr_i =
+                        unsafe { self.builder.build_in_bounds_gep(ety, arr, &[pi], "arr_i")? };
                     self.builder.build_store(arr_i, init)?;
                     let pi = self.builder.build_int_add(
                         pi,
@@ -418,13 +401,16 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
             }
             Var::Subscript(arr, ix) => {
                 let (ty, arr) = self.gen_var_ref(arr)?;
+                let arr = self
+                    .builder
+                    .build_load(ty.as_llvm_type(self.ctx), arr, "arr")?;
                 if let Type::Array(ety) = ty {
                     let ix = ensure_int!(self.gen_exp(ix)?);
                     let ptr = unsafe {
-                        self.builder.build_gep(
+                        self.builder.build_in_bounds_gep(
                             ety.as_llvm_type(self.ctx),
-                            arr,
-                            &[self.ctx.i64_type().const_zero(), ix],
+                            arr.into_pointer_value(),
+                            &[ix],
                             "arr_subscript",
                         )?
                     };

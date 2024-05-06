@@ -1,0 +1,43 @@
+// 8-queens
+let
+    var N := 8
+
+    type intArray = array of int
+
+    var row := intArray [N] of 0
+    var col := intArray [N] of 0
+    var diag1 := intArray [N + N - 1] of 0
+    var diag2 := intArray [N + N - 1] of 0
+
+    function printboard() = {
+        for i := 0 to N - 1 do {
+            for j := 0 to N - 1 do
+                print(if col[i] = j then " O" else " .");
+            print("\n")
+        };
+        print("\n")
+    }
+
+    function try(c: int) =
+        if c = N then
+            printboard()
+        else
+            for r := 0 to N - 1 do
+                let
+                    var d1 := r + c
+                    var d2 := r + N - 1 - c
+                in
+                    if row[r] = 0 & diag1[d1] = 0 & diag2[d2] = 0 then {
+                        row[r] := 1;
+                        diag1[d1] := 1;
+                        diag2[d2] := 1;
+                        col[c] := r;
+                        try(c + 1);
+                        row[r] := 0;
+                        diag1[d1] := 0;
+                        diag2[d2] := 0
+                    }
+                end
+in
+    try(0)
+end

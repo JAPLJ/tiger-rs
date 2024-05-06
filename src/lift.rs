@@ -280,7 +280,7 @@ mod tests {
 
         let ((exp, _), errs) = trans(&mut symt, Renamer::new(), &venv, &tenv, &expr.unwrap());
         assert!(errs.is_empty(), "typecheck error: {:?}", errs);
-        let exp = alpha(&mut symt, &exp);
+        let exp = alpha(&mut symt, VEnv::new(), &exp);
         let exp = lambda_lift(&mut symt, &exp);
         (exp, symt)
     }

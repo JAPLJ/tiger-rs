@@ -94,7 +94,7 @@ impl<'a> Semant<'a> {
                             for (a, ty) in args.iter().zip(aty) {
                                 targs.push(trans_expect!(self, venv, tenv, a, *ty));
                             }
-                            (TExpr::Call(f.clone(), targs), rty.clone())
+                            (TExpr::Call(f2.clone(), targs), rty.clone())
                         }
                     } else {
                         self.errs.push(GenericError(

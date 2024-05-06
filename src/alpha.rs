@@ -4,109 +4,126 @@ use rpds::HashTrieMap;
 use crate::{
     absyn::Symbol,
     symtable::SymTable,
-    typing::{self, Decl, Expr, Var},
+    typing::{self, Decl, Expr, VEnv, Var},
 };
 
 type Env = HashTrieMap<Symbol, Symbol>;
 
-fn find(env: &Env, s: &Symbol) -> Symbol {
-    *env.get(s).unwrap()
-}
-
-pub fn alpha(symt: &mut SymTable, e: &Expr) -> Expr {
+pub fn alpha(symt: &mut SymTable, ext_fs: VEnv, e: &Expr) -> Expr {
     let env = Env::new();
-    inner(symt, &env, e)
+    let mut a = Alpha::from_symt(symt, ext_fs);
+    a.alpha_exp(&env, e)
 }
 
-fn inner(symt: &mut SymTable, env: &Env, e: &Expr) -> Expr {
-    match e {
-        Expr::Var(v) => Expr::Var(Box::new(alpha_var(symt, env, v))),
-        Expr::Nil => Expr::Nil,
-        Expr::Int(x) => Expr::Int(*x),
-        Expr::Str(s) => Expr::Str(s.to_string()),
-        Expr::Call(f, args) => Expr::Call(
-            find(env, f),
-            args.iter().map(|e| inner(symt, env, e)).collect(),
-        ),
-        Expr::BinOp(lhs, op, rhs) => Expr::BinOp(
-            Box::new(inner(symt, env, lhs)),
-            *op,
-            Box::new(inner(symt, env, rhs)),
-        ),
-        Expr::Seq(es) => Expr::Seq(es.iter().map(|e| inner(symt, env, e)).collect()),
-        Expr::Assign(v, e) => Expr::Assign(
-            Box::new(alpha_var(symt, env, v)),
-            Box::new(inner(symt, env, e)),
-        ),
-        Expr::If(cond, th, el) => Expr::If(
-            Box::new(inner(symt, env, cond)),
-            Box::new(inner(symt, env, th)),
-            el.as_ref().map(|e| Box::new(inner(symt, env, e))),
-        ),
-        Expr::While(cond, body) => Expr::While(
-            Box::new(inner(symt, env, cond)),
-            Box::new(inner(symt, env, body)),
-        ),
-        Expr::Break => Expr::Break,
-        Expr::Let(decls, e) => {
-            let mut tdecls = vec![];
-            let env2 = decls.iter().fold(env.clone(), |env, decl| {
-                let (td, env) = alpha_dec(symt, &env, decl);
-                tdecls.push(td);
-                env
-            });
-            Expr::Let(tdecls, Box::new(inner(symt, &env2, e)))
-        }
-        Expr::Array(aty, size, init) => Expr::Array(
-            aty.clone(),
-            Box::new(inner(symt, env, size)),
-            Box::new(inner(symt, env, init)),
-        ),
+struct Alpha<'a> {
+    symt: &'a mut SymTable,
+    ext_fs: VEnv,
+}
+
+impl<'a> Alpha<'a> {
+    fn from_symt(symt: &'a mut SymTable, ext_fs: VEnv) -> Self {
+        Alpha { symt, ext_fs }
     }
-}
 
-fn alpha_var(symt: &mut SymTable, env: &Env, v: &Var) -> Var {
-    match v {
-        Var::Simple(x) => Var::Simple(find(env, x)),
-        Var::Subscript(arr, ix) => {
-            Var::Subscript(Box::new(alpha_var(symt, env, arr)), inner(symt, env, ix))
-        }
+    fn find(env: &Env, s: &Symbol) -> Symbol {
+        *env.get(s).unwrap()
     }
-}
 
-fn alpha_dec(symt: &mut SymTable, env: &Env, d: &Decl) -> (Decl, Env) {
-    match d {
-        Decl::Var(nm, ty, e) => {
-            let e = inner(symt, env, e);
-            let new_name = symt.new_sym();
-            (
-                Decl::Var(new_name, ty.clone(), e),
-                env.insert(*nm, new_name),
-            )
-        }
-        Decl::Func(fs) => {
-            let env = fs
-                .iter()
-                .fold(env.clone(), |env, f| env.insert(f.id, symt.new_sym()));
-            let mut tfs = vec![];
-            for f in fs {
-                let mut targs = vec![];
-                let env2 = f.args.iter().fold(env.clone(), |env, (arg, argty, rf)| {
-                    let new_argname = symt.new_sym();
-                    targs.push((new_argname, argty.clone(), *rf));
-                    env.insert(*arg, new_argname)
+    fn alpha_exp(&mut self, env: &Env, e: &Expr) -> Expr {
+        match e {
+            Expr::Var(v) => Expr::Var(Box::new(self.alpha_var(env, v))),
+            Expr::Nil => Expr::Nil,
+            Expr::Int(x) => Expr::Int(*x),
+            Expr::Str(s) => Expr::Str(s.to_string()),
+            Expr::Call(f, args) => Expr::Call(
+                if self.ext_fs.contains_key(f) {
+                    *f
+                } else {
+                    println!("{}", self.symt.resolve(f));
+                    Alpha::find(env, f)
+                },
+                args.iter().map(|e| self.alpha_exp(env, e)).collect(),
+            ),
+            Expr::BinOp(lhs, op, rhs) => Expr::BinOp(
+                Box::new(self.alpha_exp(env, lhs)),
+                *op,
+                Box::new(self.alpha_exp(env, rhs)),
+            ),
+            Expr::Seq(es) => Expr::Seq(es.iter().map(|e| self.alpha_exp(env, e)).collect()),
+            Expr::Assign(v, e) => Expr::Assign(
+                Box::new(self.alpha_var(env, v)),
+                Box::new(self.alpha_exp(env, e)),
+            ),
+            Expr::If(cond, th, el) => Expr::If(
+                Box::new(self.alpha_exp(env, cond)),
+                Box::new(self.alpha_exp(env, th)),
+                el.as_ref().map(|e| Box::new(self.alpha_exp(env, e))),
+            ),
+            Expr::While(cond, body) => Expr::While(
+                Box::new(self.alpha_exp(env, cond)),
+                Box::new(self.alpha_exp(env, body)),
+            ),
+            Expr::Break => Expr::Break,
+            Expr::Let(decls, e) => {
+                let mut tdecls = vec![];
+                let env2 = decls.iter().fold(env.clone(), |env, decl| {
+                    let (td, env) = self.alpha_dec(&env, decl);
+                    tdecls.push(td);
+                    env
                 });
-                let body = inner(symt, &env2, &f.body);
-                tfs.push(typing::Func {
-                    id: find(&env, &f.id),
-                    args: targs,
-                    result: f.result.clone(),
-                    body,
-                })
+                Expr::Let(tdecls, Box::new(self.alpha_exp(&env2, e)))
             }
-            (Decl::Func(tfs), env)
+            Expr::Array(aty, size, init) => Expr::Array(
+                aty.clone(),
+                Box::new(self.alpha_exp(env, size)),
+                Box::new(self.alpha_exp(env, init)),
+            ),
         }
-        Decl::Type(_) => (d.clone(), env.clone()),
+    }
+
+    fn alpha_var(&mut self, env: &Env, v: &Var) -> Var {
+        match v {
+            Var::Simple(x) => Var::Simple(Alpha::find(env, x)),
+            Var::Subscript(arr, ix) => {
+                Var::Subscript(Box::new(self.alpha_var(env, arr)), self.alpha_exp(env, ix))
+            }
+        }
+    }
+
+    fn alpha_dec(&mut self, env: &Env, d: &Decl) -> (Decl, Env) {
+        match d {
+            Decl::Var(nm, ty, e) => {
+                let e = self.alpha_exp(env, e);
+                let new_name = self.symt.new_sym();
+                (
+                    Decl::Var(new_name, ty.clone(), e),
+                    env.insert(*nm, new_name),
+                )
+            }
+            Decl::Func(fs) => {
+                let env = fs
+                    .iter()
+                    .fold(env.clone(), |env, f| env.insert(f.id, self.symt.new_sym()));
+                let mut tfs = vec![];
+                for f in fs {
+                    let mut targs = vec![];
+                    let env2 = f.args.iter().fold(env.clone(), |env, (arg, argty, rf)| {
+                        let new_argname = self.symt.new_sym();
+                        targs.push((new_argname, argty.clone(), *rf));
+                        env.insert(*arg, new_argname)
+                    });
+                    let body = self.alpha_exp(&env2, &f.body);
+                    tfs.push(typing::Func {
+                        id: Alpha::find(&env, &f.id),
+                        args: targs,
+                        result: f.result.clone(),
+                        body,
+                    })
+                }
+                (Decl::Func(tfs), env)
+            }
+            Decl::Type(_) => (d.clone(), env.clone()),
+        }
     }
 }
 
@@ -135,7 +152,7 @@ mod tests {
 
         let ((exp, _), errs) = trans(&mut symt, Renamer::new(), &venv, &tenv, &expr.unwrap());
         assert!(errs.is_empty(), "typecheck error: {:?}", errs);
-        let exp = alpha(&mut symt, &exp);
+        let exp = alpha(&mut symt, VEnv::new(), &exp);
         (exp, symt)
     }
 

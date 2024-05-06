@@ -39,7 +39,6 @@ impl<'a> Alpha<'a> {
                 if self.ext_fs.contains_key(f) {
                     *f
                 } else {
-                    println!("{}", self.symt.resolve(f));
                     Alpha::find(env, f)
                 },
                 args.iter().map(|e| self.alpha_exp(env, e)).collect(),

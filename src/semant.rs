@@ -157,7 +157,7 @@ impl<'a> Semant<'a> {
                 // for v := f to t do body
                 // =>
                 // let v := f, t := t in
-                //   while v != t do { body; v := v + 1 }
+                //   while v <= t do { body; v := v + 1 }
                 let tv = self.symt.new_sym();
                 fn simple_ref(x: Symbol) -> Box<TExpr> {
                     Box::new(TExpr::Var(Box::new(TVar::Simple(x))))
@@ -166,7 +166,7 @@ impl<'a> Semant<'a> {
                     TExpr::Let(
                         vec![TDecl::Var(*v, Type::Int, fr), TDecl::Var(tv, Type::Int, to)],
                         Box::new(TExpr::While(
-                            Box::new(TExpr::BinOp(simple_ref(*v), BinOp::Neq, simple_ref(tv))),
+                            Box::new(TExpr::BinOp(simple_ref(*v), BinOp::Le, simple_ref(tv))),
                             Box::new(TExpr::Seq(vec![
                                 body,
                                 TExpr::Assign(

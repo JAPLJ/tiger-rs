@@ -1,0 +1,10 @@
+let
+    var s: string := ""
+in
+    {
+        s := getchar();
+        print(s);
+        print(s);
+        flush()
+    }
+end

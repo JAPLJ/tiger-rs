@@ -10,12 +10,14 @@ use inkwell::{
     },
     AddressSpace, IntPredicate,
 };
+use itertools::Itertools;
 use lasso::Key;
 use rpds::HashTrieMap;
 
 use crate::{
     absyn::{BinOp, Symbol},
-    typing::{Decl, Expr, Func, Type, Var},
+    symtable::SymTable,
+    typing::{self, Decl, Expr, Func, Type, VEnv, Var},
 };
 
 #[derive(Debug, Clone)]
@@ -30,9 +32,12 @@ pub fn gen_ir<'a, 'ctx>(
     ctx: &'ctx Context,
     builder: &'a Builder<'ctx>,
     module: &'a Module<'ctx>,
+    ext_fs: VEnv,
+    symt: &SymTable,
     e: &Expr,
 ) -> Result<()> {
     let mut irgen = IRGen::from_ctx(ctx, builder, module);
+    irgen.gen_ext_func(ext_fs, symt)?;
     match e {
         Expr::Let(decls, body) => {
             if let [Decl::Func(fs)] = &decls[..] {
@@ -121,6 +126,24 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
 
     fn unit(&self) -> Val<'ctx> {
         Val::PointerValue(self.ctx.ptr_type(AddressSpace::default()).const_null())
+    }
+
+    fn gen_ext_func(&mut self, ext_fs: VEnv, symt: &SymTable) -> Result<()> {
+        for (nm, entry) in ext_fs.iter() {
+            if let typing::EnvEntry::Func(args, ret) = entry {
+                let name = symt.resolve(nm);
+                let ret_type = ret.as_llvm_type(self.ctx);
+                let arg_types = args
+                    .iter()
+                    .map(|a| a.as_llvm_type(self.ctx).into())
+                    .collect_vec();
+                let fn_type = ret_type.fn_type(&arg_types[..], false);
+                let fv = self.module.add_function(name, fn_type, None);
+                self.env
+                    .insert_mut(*nm, EnvEntry::Func(fv, vec![false; args.len()]));
+            }
+        }
+        Ok(())
     }
 
     fn gen_main(&mut self, e: &Expr) -> Result<()> {

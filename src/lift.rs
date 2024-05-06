@@ -16,9 +16,14 @@ type FEnv = HashTrieMap<Symbol, Vec<Symbol>>;
 // free variable -> additional argument name
 type REnv = HashTrieMap<Symbol, Symbol>;
 
-pub fn lambda_lift(symt: &mut SymTable, e: &Expr) -> Expr {
-    let venv = VEnv::new();
-    let fenv = FEnv::new();
+pub fn lambda_lift(symt: &mut SymTable, venv: VEnv, e: &Expr) -> Expr {
+    let fenv = venv.iter().fold(FEnv::new(), |fenv, (nm, entry)| {
+        if let EnvEntry::Func(..) = entry {
+            fenv.insert(*nm, vec![])
+        } else {
+            fenv
+        }
+    });
     let renv = REnv::new();
     let mut ll = LambdaLift::from_symt(symt);
     let e = ll.lift_exp(&venv, &renv, &fenv, e);
@@ -281,7 +286,7 @@ mod tests {
         let ((exp, _), errs) = trans(&mut symt, Renamer::new(), &venv, &tenv, &expr.unwrap());
         assert!(errs.is_empty(), "typecheck error: {:?}", errs);
         let exp = alpha(&mut symt, VEnv::new(), &exp);
-        let exp = lambda_lift(&mut symt, &exp);
+        let exp = lambda_lift(&mut symt, VEnv::new(), &exp);
         (exp, symt)
     }
 

@@ -76,8 +76,8 @@ fn main() -> Result<()> {
         bail!("compile error")
     }
 
-    let expr = alpha(&mut symt, venv, &expr);
-    let expr = lambda_lift(&mut symt, &expr);
+    let expr = alpha(&mut symt, venv.clone(), &expr);
+    let expr = lambda_lift(&mut symt, venv.clone(), &expr);
 
     gen_ir(&ctx, &builder, &module, &expr)?;
     module.print_to_file("output.ll").unwrap();

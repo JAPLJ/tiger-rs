@@ -51,15 +51,17 @@ pub fn functions(symt: &mut SymTable) -> VEnv {
             EnvEntry::Func(vec![Type::Int], Type::Int),
         )
         .insert(
-            symt.get_or_intern("exit"),
+            symt.get_or_intern("exit2"),
             EnvEntry::Func(vec![Type::Int], Type::Unit),
         )
 }
 
 pub fn renamer(symt: &mut SymTable) -> Renamer {
     // to avoid conflict with libc
-    Renamer::new().insert(
-        symt.get_or_intern("getchar"),
-        symt.get_or_intern("getchar2"),
-    )
+    Renamer::new()
+        .insert(
+            symt.get_or_intern("getchar"),
+            symt.get_or_intern("getchar2"),
+        )
+        .insert(symt.get_or_intern("exit"), symt.get_or_intern("exit2"))
 }

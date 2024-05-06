@@ -6,14 +6,8 @@ use chumsky::prelude::*;
 use inkwell::context::Context;
 use lasso::Rodeo;
 use tiger::{
-    absyn::parser,
-    alpha::alpha,
-    ir::gen_ir,
-    lex::lexer,
-    lift::lambda_lift,
-    semant::trans_exp,
+    absyn::parser, alpha::alpha, ir::gen_ir, lex::lexer, lift::lambda_lift, predef, semant::trans,
     symtable::SymTable,
-    typing::{TEnv, Type, VEnv},
 };
 
 fn main() -> Result<()> {
@@ -70,12 +64,11 @@ fn main() -> Result<()> {
     }
 
     let mut symt = SymTable::from_rodeo(symt.unwrap());
-    let venv = VEnv::new();
-    let tenv = TEnv::new()
-        .insert(symt.get_or_intern("int"), Type::Int)
-        .insert(symt.get_or_intern("string"), Type::String);
+    let venv = predef::functions(&mut symt);
+    let tenv = predef::types(&mut symt);
+    let renamer = predef::renamer(&mut symt);
 
-    let ((expr, _), errs) = trans_exp(&mut symt, &venv, &tenv, &expr.unwrap());
+    let ((expr, _), errs) = trans(&mut symt, renamer, &venv, &tenv, &expr.unwrap());
     if !errs.is_empty() {
         errs.into_iter().for_each(|e| {
             e.report().print(Source::from(prog)).unwrap();

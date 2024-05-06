@@ -10,6 +10,7 @@ use crate::{
 
 pub type ExpTy = (TExpr, Type);
 pub type Error = GenericError;
+pub type Renamer = HashTrieMap<Symbol, Symbol>;
 
 macro_rules! check_type {
     ($t:expr, $exp_t:expr, $span:expr, $errs:expr) => {{
@@ -43,25 +44,26 @@ macro_rules! trans_expect {
 
 pub fn trans(
     symt: &mut SymTable,
+    renamer: Renamer,
     venv: &VEnv,
     tenv: &TEnv,
     e: &Spanned<EExpr>,
 ) -> (ExpTy, Vec<Error>) {
-    let mut semant = Semant::from_symt(symt, HashTrieMap::new());
+    let mut semant = Semant::from_symt(symt, renamer);
     (semant.trans_exp(venv, tenv, e), semant.errs)
 }
 
 struct Semant<'a> {
     symt: &'a mut SymTable,
-    _renamer: HashTrieMap<String, String>,
+    renamer: Renamer,
     errs: Vec<Error>,
 }
 
 impl<'a> Semant<'a> {
-    fn from_symt(symt: &'a mut SymTable, renamer: HashTrieMap<String, String>) -> Self {
+    fn from_symt(symt: &'a mut SymTable, renamer: Renamer) -> Self {
         Semant {
             symt,
-            _renamer: renamer,
+            renamer,
             errs: vec![],
         }
     }
@@ -77,7 +79,8 @@ impl<'a> Semant<'a> {
             EExpr::Int(x) => (TExpr::Int(*x), Type::Int),
             EExpr::Str(s) => (TExpr::Str(s.to_string()), Type::String),
             EExpr::Call(f, args) => {
-                if let Some(ft) = venv.get(f) {
+                let f2 = self.renamer.get(f).cloned().unwrap_or(*f);
+                if let Some(ft) = venv.get(&f2) {
                     if let EnvEntry::Func(aty, rty) = ft {
                         if args.len() != aty.len() {
                             self.errs.push(GenericError(
@@ -387,7 +390,7 @@ impl<'a> Semant<'a> {
 mod tests {
     use crate::{
         parse,
-        semant::trans,
+        semant::{trans, Renamer},
         symtable::SymTable,
         test_util::tokenize_ok,
         typing::{TEnv, Type, VEnv},
@@ -407,7 +410,7 @@ mod tests {
             .insert(symt.get_or_intern("int"), Type::Int)
             .insert(symt.get_or_intern("string"), Type::String);
 
-        let (expty, errs) = trans(&mut symt, &venv, &tenv, &expr.unwrap());
+        let (expty, errs) = trans(&mut symt, Renamer::new(), &venv, &tenv, &expr.unwrap());
         (expty, errs, symt)
     }
 

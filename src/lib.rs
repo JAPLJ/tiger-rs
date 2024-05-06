@@ -4,6 +4,7 @@ pub mod error;
 pub mod ir;
 pub mod lex;
 pub mod lift;
+pub mod predef;
 pub mod semant;
 pub mod symtable;
 pub mod typing;

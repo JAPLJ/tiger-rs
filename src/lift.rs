@@ -260,7 +260,7 @@ mod tests {
         alpha::alpha,
         lift::lambda_lift,
         parse,
-        semant::trans,
+        semant::{trans, Renamer},
         symtable::SymTable,
         test_util::tokenize_ok,
         typing::{Expr, TEnv, Type, VEnv},
@@ -278,7 +278,7 @@ mod tests {
             .insert(symt.get_or_intern("int"), Type::Int)
             .insert(symt.get_or_intern("string"), Type::String);
 
-        let ((exp, _), errs) = trans(&mut symt, &venv, &tenv, &expr.unwrap());
+        let ((exp, _), errs) = trans(&mut symt, Renamer::new(), &venv, &tenv, &expr.unwrap());
         assert!(errs.is_empty(), "typecheck error: {:?}", errs);
         let exp = alpha(&mut symt, &exp);
         let exp = lambda_lift(&mut symt, &exp);

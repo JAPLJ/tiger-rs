@@ -316,6 +316,7 @@ impl<'a, 'ctx> IRGen<'a, 'ctx> {
                 let after_bb = self.ctx.append_basic_block(par, "after");
                 self.cur_block.push(after_bb);
 
+                self.builder.build_unconditional_branch(loop_bb)?;
                 self.builder.position_at_end(loop_bb);
                 self.gen_exp(body)?;
 
